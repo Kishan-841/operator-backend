@@ -170,6 +170,11 @@ export const updateLead = async (req, res) => {
     const { id } = req.params;
     const existing = await prisma.lead.findUnique({ where: { id } });
     if (!existing) return res.status(404).json({ message: 'Lead not found.' });
+    // Owner-scoped like getLead: sales users may only edit their own leads
+    // (404, never revealing existence); admins may edit any.
+    if (!isAdmin(req.user) && existing.assignedSalesId !== req.user.id) {
+      return res.status(404).json({ message: 'Lead not found.' });
+    }
 
     const result = validateLeadPayload(req.body);
     if (!result.ok) {

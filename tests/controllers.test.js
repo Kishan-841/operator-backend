@@ -539,3 +539,28 @@ test('ISP lead accepts the MIX_BANDWIDTH type with a spec', async () => {
   assert.equal(r.status, 201);
   assert.deepEqual(r.body.data.requirementDetails.bandwidthMix, ['MIX_BANDWIDTH']);
 });
+
+test("PUT /api/leads/:id is owner-scoped — another sales user's lead → 404", async () => {
+  const otherSales = await prisma.user.upsert({
+    where: { email: 'sales-other@test.local' },
+    update: { isActive: true },
+    create: { name: 'Other Sales', email: 'sales-other@test.local', password: 'x', role: 'SALES_USER' },
+  });
+  const notMine = await createLead({ assignedSalesId: otherSales.id });
+  const r = await request('PUT', `/api/leads/${notMine.id}`, {
+    token: tokens.sales,
+    body: { ...validLead(), organizationName: 'Hijacked Name' },
+  });
+  assert.equal(r.status, 404, 'existence is hidden from non-owners');
+  const after = await prisma.lead.findUnique({ where: { id: notMine.id }, select: { organizationName: true } });
+  assert.notEqual(after.organizationName, 'Hijacked Name');
+
+  // The owner (and admins) can still update.
+  const mine = await createLead({});
+  const ok = await request('PUT', `/api/leads/${mine.id}`, {
+    token: tokens.sales,
+    body: { ...validLead(), organizationName: 'Renamed by owner' },
+  });
+  assert.equal(ok.status, 200);
+  assert.equal(ok.body.data.organizationName, 'Renamed by owner');
+});
