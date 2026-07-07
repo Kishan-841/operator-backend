@@ -1,0 +1,660 @@
+// Operator CRM — Prisma schema
+// Conventions (CLAUDE.md §11): PostgreSQL, camelCase columns, uuid PKs,
+// every *At is DateTime, every *ById is a String FK to User.
+//
+// Schema philosophy: keep `Lead` lean. Category-specific data lives in the
+// `requirementDetails` JSON blob (validated at the API boundary), NOT as
+// dozens of nullable top-level columns. See CLAUDE.md §1.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ---------------------------------------------------------------------------
+// Enums
+// ---------------------------------------------------------------------------
+
+enum Role {
+  SUPER_ADMIN
+  ADMIN
+  SALES_USER
+  FEASIBILITY_USER
+  DELIVERY_USER
+  STORE_USER
+  NOC_L2_USER
+  NOC_L3_USER
+  SOFTWARE_USER
+}
+
+enum LeadCategory {
+  PIN_RATE
+  JV
+  REVENUE_SHARING
+  ISP
+}
+
+enum LeadStatus {
+  NEW // stage 1
+  FEASIBILITY_PENDING // stage 2
+  FEASIBILITY_DONE
+  PRICING_PENDING // stage 3
+  PRICING_DONE
+  PENDING_APPROVAL // stage 4
+  APPROVED
+  REJECTED
+  DOCS_PENDING // stage 5
+  DOCS_UPLOADED
+  DELIVERY_REQ_PENDING // stage 6 — delivery raises the material request
+  MATERIAL_APPROVAL_PENDING // stage 6b — admin approves the material list
+  AWAITING_DISPATCH // stage 7
+  DISPATCHED
+  INSTALLATION_PENDING // stage 8
+  INSTALLED
+  NOC_L2_PENDING // stage 9
+  NOC_L2_DONE
+  AGGREGATOR_CONFIRM_PENDING // stage 10
+  AGGREGATOR_CONFIRMED
+  SOFTWARE_PENDING // stage 11
+  SOFTWARE_DONE
+  NOC_L3_PENDING // stage 12
+  NOC_L3_DONE
+  L3_TO_L2_HANDOFF // stage 13
+  CLIENT_HANDOVER_PENDING // stage 14
+  AGREEMENT_PENDING // stage 15
+  AGREEMENT_SENT_FOR_SIGNATURE // stage 15 — agreement sent to the operator to sign
+  COMPLETED
+}
+
+enum VendorType {
+  FIBER
+  CLIENT
+  COMMISSION
+  TELCO
+}
+
+// Store & inventory (Milestone: store-inventory-flow).
+enum StoreProductType {
+  SWITCH
+  SFP
+  CLOSURE
+  RF
+  PATCH_CORD
+  FIBER
+  MEDIA_CONVERTER
+  ROUTER
+}
+
+enum POStatus {
+  PENDING_ADMIN // created, awaiting admin approval
+  APPROVED // approved, ready to be stocked (no goods-receipt step)
+  REJECTED
+  COMPLETED // all items added to store / consumed
+}
+
+enum POItemStatus {
+  PURCHASED // on the PO, not yet physically stocked
+  IN_STORE // live, assignable stock (has serials / received qty)
+}
+
+enum DeliveryRequestStatus {
+  PENDING_APPROVAL
+  APPROVED
+  REJECTED
+  ASSIGNED // store assigned material — terminal for this loop
+}
+
+// ---------------------------------------------------------------------------
+// Models
+// ---------------------------------------------------------------------------
+
+model User {
+  id        String   @id @default(uuid())
+  name      String
+  email     String   @unique
+  password  String // bcrypt hash
+  role      Role
+  isActive  Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  // Back-relations from Lead. Named because several FKs target User and
+  // Prisma cannot disambiguate them otherwise.
+  leadsCreated           Lead[]            @relation("LeadCreatedBy")
+  leadsAssignedSales     Lead[]            @relation("LeadAssignedSales")
+  leadsFeasibility       Lead[]            @relation("LeadFeasibilityAssignee")
+  leadsApproved          Lead[]            @relation("LeadApprovedBy")
+  leadsNocL2             Lead[]            @relation("LeadNocL2Assignee")
+  leadsNocL3             Lead[]            @relation("LeadNocL3Assignee")
+  leadsL3ToL2            Lead[]            @relation("LeadL3ToL2Assignee")
+  leadsSoftware          Lead[]            @relation("LeadSoftwareAssignee")
+  leadsAgreementVerified Lead[]            @relation("LeadAgreementVerifiedBy")
+  statusChanges          StatusChangeLog[] @relation("StatusChangedBy")
+  notifications          Notification[]    @relation("NotificationRecipient")
+  uploadedDocuments      LeadDocument[]        @relation("DocUploadedBy")
+  verifiedDocuments      LeadDocument[]        @relation("DocVerifiedBy")
+  materialReqs           MaterialRequisition[] @relation("MatReqBy")
+  dispatches             Dispatch[]            @relation("DispatchBy")
+  // Store & inventory (store-inventory-flow).
+  storeProductsCreated   StoreProduct[]        @relation("StoreProductCreatedBy")
+  purchaseOrdersCreated  StorePurchaseOrder[]  @relation("StorePOCreatedBy")
+  purchaseOrdersApproved StorePurchaseOrder[]  @relation("StorePOAdminApproved")
+  purchaseOrdersRejected StorePurchaseOrder[]  @relation("StorePORejected")
+  deliveryRequests       DeliveryRequest[]     @relation("DeliveryRequestCreatedBy")
+  deliveryReqApproved    DeliveryRequest[]     @relation("DeliveryRequestApprovedBy")
+  deliveryReqRejected    DeliveryRequest[]     @relation("DeliveryRequestRejectedBy")
+  deliveryReqAssigned    DeliveryRequest[]     @relation("DeliveryRequestAssignedToStore")
+  deliveryRequestLogs    DeliveryRequestLog[]  @relation("DeliveryRequestLogPerformedBy")
+
+  @@index([role])
+}
+
+model Lead {
+  id         String       @id @default(uuid())
+  leadNumber String       @unique // e.g. OPC-0001
+  category   LeadCategory
+
+  // Always-present (common) fields — apply to every category. Category-specific
+  // data lives in requirementDetails (below), not here.
+  organizationName        String
+  email                   String
+  website                 String?
+  whatsappNumber          String?
+  existingServiceProvider String?
+  annualRevenue           Float?
+  // Business structure for non-ISP operators — drives the required-docs list at
+  // the docs stage: 'PROPRIETORSHIP' | 'PARTNERSHIP' | 'PVT_LTD'.
+  // Contact person
+  contactPersonName String?
+  phone             String?
+  gender            String? // 'Male' | 'Female' | 'Other'
+  // Location
+  areaName     String?
+  city         String?
+  state        String?
+  pincode      String?
+  latitude     Float?
+  longitude    Float?
+  territory    String?
+  // Lead details
+  sourceOfLead          String? // 'Referral' | 'Website' | 'Cold Call' | ...
+  customerInterestLevel String? // 'HOT' | 'WARM' | 'COLD' — common to all categories
+  notes                 String? // free-text, common to all categories
+
+  // Category-specific blob. Validated by Zod (FE) + a matching validator (BE).
+  // See frontend/lib/lead-categories.ts for the per-category shapes.
+  requirementDetails Json
+
+  // Pipeline state
+  status LeadStatus @default(NEW)
+
+  // --- Stage owners (real FK relations to User) ---
+  createdById String
+  createdBy   User   @relation("LeadCreatedBy", fields: [createdById], references: [id])
+
+  assignedSalesId String?
+  assignedSales   User?   @relation("LeadAssignedSales", fields: [assignedSalesId], references: [id])
+
+  feasibilityAssignedToId String?
+  feasibilityAssignedTo   User?     @relation("LeadFeasibilityAssignee", fields: [feasibilityAssignedToId], references: [id])
+  feasibilityNotes        String?
+  // Network classification chosen at feasibility: 'ON_NET' (served from our own
+  // network) or 'OFF_NET' (needs third-party / vendor fiber).
+  feasibilityNetworkType  String?
+  // Multiple POP locations selected at feasibility (snapshots so display survives
+  // POP renames): [{ id, name, latitude, longitude }].
+  feasibilityPops         Json?
+  // Off-net serving details (only when networkType = 'OFF_NET'):
+  // { nearestBts, serviceProvider, btsLatitude, btsLongitude, portDetails }.
+  feasibilityOffNet       Json?
+  // Fiber segments chosen at feasibility — "Own Network", a Vendor, or Client
+  // Fiber (free-text client name, not a vendor), each with a point-to-point
+  // length in metres and an optional A→B path. Validated against
+  // validation/feasibilityVendors.js. Shape:
+  // [{ kind: 'OWN'|'VENDOR'|'CLIENT', vendorId?, vendorName?, vendorType?, clientName?, fiberMeters, path?: { a:{lat,lng}, b:{lat,lng} } }]
+  feasibilityVendors      Json?
+  feasibilityReviewedAt   DateTime?
+  // POP selected during feasibility (reusable master, see PopLocation).
+  popLocationId           String?
+  popLocation             PopLocation? @relation(fields: [popLocationId], references: [id])
+
+  pricing Json? // { ratePerMonth, latitude, longitude, popId }
+
+  approvedById   String?
+  approvedBy     User?     @relation("LeadApprovedBy", fields: [approvedById], references: [id])
+  approvedAt     DateTime?
+  approvalNotes  String? // optional note the admin adds when approving
+  rejectedReason String?
+  // Why admin sent a lead back to sales for pricing revision (cleared on resubmit).
+  pricingRevisionReason String?
+  // How many times admin sent this lead back for pricing revision.
+  pricingRevisionCount  Int     @default(0)
+  // Why software rejected an uploaded doc and sent the lead back to the docs
+  // stage (cleared when sales resubmits — which returns it straight to software).
+  docsRevisionReason String?
+  // How many times software sent this lead back over rejected docs.
+  docsRevisionCount  Int     @default(0)
+
+  // Stage-5 documents (LeadDocument rows). Replaces the old `documents Json?`.
+  documents   LeadDocument[]
+  // Stage 6 + 7 (M4) — dormant, superseded by deliveryRequest.
+  materialReq MaterialRequisition?
+  dispatch    Dispatch?
+  // Stage 6–7 (store-inventory-flow) — catalog-driven request + assignment.
+  deliveryRequest DeliveryRequest?
+
+  installationCompletedAt DateTime?
+
+  // Network handover details captured at the docs stage, shown to NOC L2 + L3.
+  ipDetails Json? // { entries: [{ type: 'ISP'|'GAZON', irinnEmail?, ipv4?, ipv6? }] } (legacy rows: flat { irinnEmail, ipv4, ipv6 })
+
+  nocL2AssignedToId String?
+  nocL2AssignedTo   User?   @relation("LeadNocL2Assignee", fields: [nocL2AssignedToId], references: [id])
+  nocL2ConfigNotes  String?
+  // Structured L2 config: { configType: 'SWITCH'|'PORT', serial, software: { opm, dude, cacti } }
+  nocL2Config       Json?
+
+  aggregatorType          String? // 'BNG' | 'MIKROTIK' (extend as needed)
+  aggregatorConfirmRemark String? // §3 stage-10 handoff remark
+
+  softwareAssignedToId String?
+  softwareAssignedTo   User?     @relation("LeadSoftwareAssignee", fields: [softwareAssignedToId], references: [id])
+  portalManagedBy      String? // 'ISP' (client manages own portal — no creds) | 'SOFTWARE' (our team; creds below)
+  portalUsername       String?
+  portalUrl            String?
+  portalPassword       String? // operator portal credential, stored as-is for reference
+  ipPoolNoticeAt       DateTime?
+
+  nocL3AssignedToId String?
+  nocL3AssignedTo   User?     @relation("LeadNocL3Assignee", fields: [nocL3AssignedToId], references: [id])
+  ipAllocation      Json? // { subnet, gateway, vlanId, ... }
+  bngConfigDoneAt   DateTime?
+  // Which NOC L2 user the L3→L2 handoff is assigned to (set by NOC L3, reassignable).
+  l3ToL2AssignedToId String?
+  l3ToL2AssignedTo   User?    @relation("LeadL3ToL2Assignee", fields: [l3ToL2AssignedToId], references: [id])
+
+  // Stage 15: when the agreement document was last generated & downloaded.
+  agreementGeneratedAt DateTime?
+  // Stage 15: when the generated agreement was sent to the operator to sign
+  // (soft user ref — informational, like Notification.leadId).
+  agreementSentForSignatureAt   DateTime?
+  agreementSentForSignatureById String?
+  agreementUploadedAt   DateTime?
+  agreementVerifiedById String?
+  agreementVerifiedBy   User?     @relation("LeadAgreementVerifiedBy", fields: [agreementVerifiedById], references: [id])
+
+  // Generic free-text accumulation across stages (§3)
+  pipelineNotes Json?
+  noteEntries   LeadNote[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([category])
+  @@index([status])
+  @@index([assignedSalesId, status])
+  @@index([feasibilityAssignedToId, status])
+  @@index([nocL2AssignedToId, status])
+  @@index([nocL3AssignedToId, status])
+  @@index([softwareAssignedToId, status])
+  @@index([createdById])
+  @@index([createdAt])
+}
+
+// Per-stage free-text notes captured throughout a lead's lifecycle, with the
+// author + stage + timestamp. Surfaced as a per-lead timeline and a global
+// Notes feed. Written soft-fail from each stage transition.
+model LeadNote {
+  id         String   @id @default(uuid())
+  leadId     String
+  lead       Lead     @relation(fields: [leadId], references: [id], onDelete: Cascade)
+  stage      String // stage key, e.g. 'FEASIBILITY', 'PRICING', 'NOC_L2', 'GENERAL'
+  body       String
+  authorId   String? // soft ref to User
+  authorName String? // snapshot of the author's name at write time
+  createdAt  DateTime @default(now())
+
+  @@index([leadId, createdAt])
+  @@index([createdAt])
+  @@index([stage])
+}
+
+// Append-only audit of every stage transition (CLAUDE.md §3). Writes are
+// soft-failed in the service layer so a logging error never rolls back the
+// primary business operation.
+// Unified event log (surfaced in the UI as "Event Log"). Born as a pipeline
+// status-change log; now records any meaningful change — lead CRUD, documents,
+// user-admin actions, doc-type creation, and auth events — with the actor's IP.
+// Always soft-failed in the service layer (a logging error never rolls back the
+// primary business operation).
+model StatusChangeLog {
+  id          String   @id @default(uuid())
+  action      String   @default("STATUS_CHANGED") // LEAD_CREATED, LEAD_UPDATED, STATUS_CHANGED, DOC_UPLOADED, USER_UPDATED, LOGIN_SUCCESS, …
+  entityType  String // 'Lead' | 'User' | 'DocumentType' | 'Auth'
+  entityId    String?
+  summary     String? // human-readable line, e.g. "Updated OPC-0001 (rate, territory)"
+  changes     Json? // [{ field, from, to }] for edits
+  oldValue    String? // status transitions
+  newValue    String? // status transitions
+  reason      String?
+  changedById String?
+  changedBy   User?    @relation("StatusChangedBy", fields: [changedById], references: [id])
+  actorLabel  String? // snapshot of the actor (e.g. attempted email) when there's no user FK
+  ipAddress   String?
+  userAgent   String?
+  // Denormalised owner of the lead this event belongs to (null for non-Lead
+  // events). Lets sales-scoped report/dashboard queries filter the log directly
+  // instead of resolving the user's lead-id set and doing `entityId IN (…)`.
+  salesOwnerId String?
+  createdAt   DateTime @default(now())
+
+  @@index([entityType, entityId])
+  @@index([changedById])
+  @@index([createdAt])
+  @@index([action])
+  @@index([entityType, createdAt])
+  @@index([salesOwnerId, createdAt])
+}
+
+// Master list of lead-document types (Aadhaar, PAN, SLA, …). Editable: users can
+// add new types from the docs upload modal and they persist for everyone.
+model DocumentType {
+  id        String   @id @default(uuid())
+  name      String   @unique
+  createdAt DateTime @default(now())
+}
+
+// Reusable POP (Point-of-Presence) locations. Created during feasibility review;
+// once saved, they're searchable + selectable on future leads (CLAUDE.md §3 stage 2).
+model PopLocation {
+  id          String   @id @default(uuid())
+  name        String   @unique
+  latitude    Float
+  longitude   Float
+  createdById String? // soft ref — no FK relation to keep User lean
+  createdAt   DateTime @default(now())
+  leads       Lead[]
+
+  @@index([name])
+}
+
+// Fiber / commission / client vendors. Created by ADMIN or SALES_USER, then
+// selected as fiber segments during feasibility. createdById is a soft ref (no
+// FK relation) to keep User lean — mirrors PopLocation.
+model Vendor {
+  id          String     @id @default(uuid())
+  type        VendorType
+  name        String
+  companyName String?
+  email       String?
+  mobile      String?
+  gst         String?
+  pan         String?
+  // Commission share (0–100) — only meaningful for COMMISSION vendors.
+  commissionPercentage Float?
+  bankDetails Json? // { accountName, accountNumber, ifsc, bankName }
+  createdById String?
+  createdAt   DateTime   @default(now())
+  updatedAt   DateTime   @updatedAt
+
+  purchaseOrders StorePurchaseOrder[] @relation("StorePOVendor")
+
+  @@index([type])
+  @@index([name])
+  @@index([createdAt])
+}
+
+// All-India pincode / post-office master (imported from the founder's
+// "All India Pincodes" sheet). Reference data used to power the searchable
+// Territory picker on the lead form — pick an area and auto-fill state /
+// district / pincode / lat-long. Read-only in the app; (re)loaded by
+// scripts/importPincodes.mjs.
+model Pincode {
+  id         String  @id @default(uuid())
+  pincode    String
+  officeName String
+  district   String
+  state      String
+  circle     String?
+  region     String?
+  latitude   Float?
+  longitude  Float?
+
+  @@index([pincode])
+  @@index([officeName])
+  @@index([district])
+  @@index([state])
+}
+
+// Atomic sequence generator for human-readable document numbers (OPC-0001,
+// and later delivery/dispatch numbers). Incremented inside a transaction.
+model Counter {
+  key       String   @id // e.g. 'LEAD'
+  value     Int      @default(0)
+  updatedAt DateTime @updatedAt
+}
+
+// Per-user notifications emitted on stage transitions (CLAUDE.md §3).
+model Notification {
+  id        String   @id @default(uuid())
+  userId    String
+  user      User     @relation("NotificationRecipient", fields: [userId], references: [id])
+  type      String // e.g. 'STAGE_TRANSITION'
+  title     String
+  message   String?
+  leadId    String? // soft ref to Lead for deep-linking
+  isRead    Boolean  @default(false)
+  createdAt DateTime @default(now())
+
+  @@index([userId, isRead])
+  @@index([createdAt])
+}
+
+// Stage 5 — uploaded lead documents. `storageKey` is opaque to callers: the
+// storage service maps it to a local path now, to a Cloudflare R2 object later.
+model LeadDocument {
+  id           String   @id @default(uuid())
+  leadId       String
+  lead         Lead     @relation(fields: [leadId], references: [id], onDelete: Cascade)
+  type         String // 'GST' | 'PAN' | 'AGREEMENT' | 'OTHER'
+  label        String?
+  fileName     String
+  storageKey   String
+  mimeType     String?
+  size         Int?
+  uploadedById String?
+  uploadedBy   User?    @relation("DocUploadedBy", fields: [uploadedById], references: [id])
+  // Stage-11 software docs verification (SOFTWARE_USER).
+  verificationStatus String    @default("PENDING") // 'PENDING' | 'VERIFIED' | 'FLAGGED'
+  verificationNote   String? // reason when FLAGGED
+  verifiedById       String?
+  verifiedBy         User?     @relation("DocVerifiedBy", fields: [verifiedById], references: [id])
+  verifiedAt         DateTime?
+  // Stage-5 sales approval — sales verifies each uploaded doc before the lead can
+  // leave the docs stage. Separate from the software verification above.
+  salesApprovedAt    DateTime?
+  salesApprovedById  String?
+  createdAt          DateTime  @default(now())
+
+  @@index([leadId])
+}
+
+// Stage 6 — material requisition + timeline (one per lead).
+model MaterialRequisition {
+  id          String    @id @default(uuid())
+  leadId      String    @unique
+  lead        Lead      @relation(fields: [leadId], references: [id], onDelete: Cascade)
+  items       Json // [{ name, quantity, notes? }]
+  targetDate  DateTime?
+  notes       String?
+  createdById String?
+  createdBy   User?     @relation("MatReqBy", fields: [createdById], references: [id])
+  createdAt   DateTime  @default(now())
+}
+
+// Stage 7 — store dispatch record (minimal: items + serials, no stock tracking).
+model Dispatch {
+  id             String   @id @default(uuid())
+  leadId         String   @unique
+  lead           Lead     @relation(fields: [leadId], references: [id], onDelete: Cascade)
+  items          Json // [{ name, quantity, serials: [] }]
+  notes          String?
+  dispatchedById String?
+  dispatchedBy   User?    @relation("DispatchBy", fields: [dispatchedById], references: [id])
+  dispatchedAt   DateTime @default(now())
+}
+
+// ---------------------------------------------------------------------------
+// Store & inventory + delivery-material flow (store-inventory-flow)
+// ---------------------------------------------------------------------------
+
+// Product catalogue.
+model StoreProduct {
+  id          String           @id @default(uuid())
+  category    StoreProductType
+  modelNumber String           @unique
+  brandName   String
+  price       Float?
+  description String?
+  unit        String           @default("pcs") // "pcs" | "mtrs" (bulk, e.g. fiber)
+  isActive    Boolean          @default(true)
+  createdById String
+  createdAt   DateTime         @default(now())
+  updatedAt   DateTime         @updatedAt
+
+  createdBy            User                     @relation("StoreProductCreatedBy", fields: [createdById], references: [id])
+  poItems              StorePurchaseOrderItem[]
+  deliveryRequestItems DeliveryRequestItem[]    @relation("DeliveryRequestItemProduct")
+
+  @@index([category])
+  @@index([modelNumber])
+  @@index([brandName])
+  @@index([isActive])
+}
+
+// Procurement — purchase orders. Inventory of record = StorePurchaseOrderItem
+// rows with status = IN_STORE (their serialNumbers / receivedQuantity is stock).
+model StorePurchaseOrder {
+  id                String    @id @default(uuid())
+  poNumber          String    @unique
+  totalAmount       Float?
+  notes             String?
+  remark            String?
+  warehouse         String?
+  status            POStatus  @default(PENDING_ADMIN)
+  createdById       String
+  createdAt         DateTime  @default(now())
+  updatedAt         DateTime  @updatedAt
+  vendorId          String?
+  adminApprovedById String?
+  adminApprovedAt   DateTime?
+  rejectedById      String?
+  rejectedAt        DateTime?
+  rejectedReason    String?
+
+  createdBy       User                     @relation("StorePOCreatedBy", fields: [createdById], references: [id])
+  adminApprovedBy User?                    @relation("StorePOAdminApproved", fields: [adminApprovedById], references: [id])
+  rejectedBy      User?                    @relation("StorePORejected", fields: [rejectedById], references: [id])
+  vendor          Vendor?                  @relation("StorePOVendor", fields: [vendorId], references: [id])
+  items           StorePurchaseOrderItem[]
+
+  @@index([poNumber])
+  @@index([vendorId])
+  @@index([status])
+  @@index([createdById])
+}
+
+model StorePurchaseOrderItem {
+  id               String       @id @default(uuid())
+  poId             String?
+  productId        String
+  quantity         Int // ordered quantity
+  unitPrice        Float?
+  serialNumbers    String[] // live serials still IN_STORE (deducted on assign)
+  receivedQuantity Int? // for bulk (non-serialized) products
+  stockedQuantity  Int          @default(0) // cumulative units EVER received (never decremented) — drives partial-receipt progress & PO completion
+  status           POItemStatus @default(PURCHASED)
+  addedToStoreAt   DateTime?
+  createdAt        DateTime     @default(now())
+
+  purchaseOrder        StorePurchaseOrder?   @relation(fields: [poId], references: [id], onDelete: Cascade)
+  product              StoreProduct          @relation(fields: [productId], references: [id])
+  deliveryRequestItems DeliveryRequestItem[] @relation("DeliveryRequestItemAssignedFrom")
+
+  @@index([poId])
+  @@index([productId])
+  @@index([status])
+}
+
+// Delivery material requests (demand). One per lead (1:1).
+model DeliveryRequest {
+  id                        String                @id @default(uuid())
+  requestNumber             String                @unique
+  leadId                    String                @unique
+  requestedById             String
+  requestedAt               DateTime              @default(now())
+  deliveryAddress           String?
+  notes                     String?
+  urgency                   String?
+  status                    DeliveryRequestStatus @default(PENDING_APPROVAL)
+  superAdminApprovedById    String?
+  superAdminApprovedAt      DateTime?
+  superAdminRejectedById    String?
+  superAdminRejectedAt      DateTime?
+  superAdminRejectionReason String?
+  assignedToStoreManagerId  String?
+  assignedAt                DateTime?
+  createdAt                 DateTime              @default(now())
+  updatedAt                 DateTime              @updatedAt
+
+  lead                   Lead                  @relation(fields: [leadId], references: [id], onDelete: Cascade)
+  requestedBy            User                  @relation("DeliveryRequestCreatedBy", fields: [requestedById], references: [id])
+  superAdminApprovedBy   User?                 @relation("DeliveryRequestApprovedBy", fields: [superAdminApprovedById], references: [id])
+  superAdminRejectedBy   User?                 @relation("DeliveryRequestRejectedBy", fields: [superAdminRejectedById], references: [id])
+  assignedToStoreManager User?                 @relation("DeliveryRequestAssignedToStore", fields: [assignedToStoreManagerId], references: [id])
+  items                  DeliveryRequestItem[]
+  logs                   DeliveryRequestLog[]
+
+  @@index([requestedById])
+  @@index([status])
+  @@index([createdAt])
+}
+
+model DeliveryRequestItem {
+  id                    String    @id @default(uuid())
+  deliveryRequestId     String
+  productId             String
+  quantity              Int // requested qty
+  assignedQuantity      Int?
+  assignedSerialNumbers String[] // union of serials assigned (across POs)
+  assignedFromPOItemId  String? // primary/first source PO item (metadata)
+  isAssigned            Boolean   @default(false)
+  assignedAt            DateTime?
+  createdAt             DateTime  @default(now())
+
+  deliveryRequest    DeliveryRequest         @relation(fields: [deliveryRequestId], references: [id], onDelete: Cascade)
+  product            StoreProduct            @relation("DeliveryRequestItemProduct", fields: [productId], references: [id])
+  assignedFromPOItem StorePurchaseOrderItem? @relation("DeliveryRequestItemAssignedFrom", fields: [assignedFromPOItemId], references: [id])
+
+  @@index([deliveryRequestId])
+  @@index([productId])
+}
+
+model DeliveryRequestLog {
+  id                String   @id @default(uuid())
+  deliveryRequestId String
+  action            String // 'CREATED' | 'APPROVED' | 'REJECTED' | 'ITEMS_ASSIGNED' | ...
+  performedById     String
+  details           Json?
+  createdAt         DateTime @default(now())
+
+  deliveryRequest DeliveryRequest @relation(fields: [deliveryRequestId], references: [id], onDelete: Cascade)
+  performedBy     User            @relation("DeliveryRequestLogPerformedBy", fields: [performedById], references: [id])
+
+  @@index([deliveryRequestId])
+  @@index([createdAt])
+}

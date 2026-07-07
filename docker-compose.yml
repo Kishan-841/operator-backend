@@ -1,0 +1,37 @@
+# Operator CRM backend on the VM: Postgres + API in one stack.
+# Copy .env.docker.example → .env.docker, fill it in, then:
+#   docker compose up -d --build
+services:
+  db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: operator_crm
+      POSTGRES_USER: operator
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env.docker}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U operator -d operator_crm']
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  api:
+    build: .
+    restart: unless-stopped
+    env_file: .env.docker
+    environment:
+      DATABASE_URL: postgresql://operator:${POSTGRES_PASSWORD}@db:5432/operator_crm?schema=public
+    ports:
+      - '5003:5003'
+    volumes:
+      # Local-disk document storage (only used when R2 isn't configured).
+      - uploads:/app/uploads
+    depends_on:
+      db:
+        condition: service_healthy
+
+volumes:
+  pgdata:
+  uploads:

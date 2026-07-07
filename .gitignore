@@ -1,0 +1,14 @@
+# Dependencies
+node_modules/
+
+# Env — .env.example / .env.docker.example / .env.test stay tracked
+.env
+.env.local
+.env.docker
+
+# Local document storage (volume in Docker; R2 in production)
+uploads/
+
+# Misc
+*.log
+.DS_Store

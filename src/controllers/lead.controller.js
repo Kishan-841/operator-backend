@@ -1,0 +1,203 @@
+import prismaPkg from '@prisma/client';
+import prisma from '../config/db.js';
+import { parsePagination, paginatedResponse } from '../utils/pagination.js';
+import { validateLeadPayload, LEAD_CATEGORIES } from '../validation/leadCategories.js';
+import { validateIpDetails } from '../validation/ipDetails.js';
+import { generateLeadNumber } from '../services/leadNumber.service.js';
+import { logEvent, diffFields } from '../services/statusChangeLog.service.js';
+import { addLeadNote } from '../services/leadNote.service.js';
+import { stripLeadForRole, stripLeadsForRole } from '../utils/leadVisibility.js';
+import { actorFromReq } from '../utils/requestContext.js';
+import { isAdmin } from '../utils/roleHelper.js';
+
+// Lead fields worth diffing in the event log (scalars + the requirement blob).
+const LEAD_DIFF_FIELDS = [
+  'category', 'organizationName', 'email', 'contactPersonName', 'phone', 'territory',
+  'annualRevenue', 'website', 'whatsappNumber', 'existingServiceProvider', 'gender',
+  'areaName', 'city', 'state', 'pincode', 'latitude', 'longitude', 'sourceOfLead',
+  'customerInterestLevel', 'notes', 'requirementDetails',
+];
+
+const { LeadStatus } = prismaPkg;
+const VALID_STATUSES = Object.values(LeadStatus);
+
+const creatorSelect = {
+  createdBy: { select: { id: true, name: true, email: true } },
+  popLocation: { select: { id: true, name: true, latitude: true, longitude: true } },
+};
+
+/** POST /api/leads — create a NEW lead with an atomically-generated number. */
+export const createLead = async (req, res) => {
+  try {
+    const result = validateLeadPayload(req.body);
+    if (!result.ok) {
+      return res.status(400).json({ message: 'Validation failed.', errors: result.errors });
+    }
+    const { category, requirementDetails, ...contact } = result.data;
+
+    const lead = await prisma.$transaction(async (tx) => {
+      const leadNumber = await generateLeadNumber(tx);
+      return tx.lead.create({
+        data: {
+          leadNumber,
+          category,
+          requirementDetails,
+          ...contact,
+          status: 'NEW',
+          createdById: req.user.id,
+          assignedSalesId: req.user.id,
+        },
+        include: creatorSelect,
+      });
+    });
+
+    await logEvent({
+      action: 'LEAD_CREATED',
+      entityType: 'Lead',
+      entityId: lead.id,
+      summary: `Created lead ${lead.leadNumber} — ${lead.organizationName}`,
+      actor: actorFromReq(req),
+    });
+    await addLeadNote({ leadId: lead.id, stage: 'LEAD', body: lead.notes, actor: actorFromReq(req) });
+
+    return res.status(201).json({ message: 'Lead created.', data: lead });
+  } catch (error) {
+    console.error('[lead.createLead]', error);
+    return res.status(500).json({ message: 'Failed to create lead.' });
+  }
+};
+
+/** GET /api/leads — search + category/status filters + pagination. */
+export const getLeads = async (req, res) => {
+  try {
+    const { search, category, status } = req.query;
+    const term = search ? String(search).trim() : '';
+
+    const where = {
+      // Sales users see only the leads they own; admins see every lead.
+      ...(isAdmin(req.user) ? {} : { assignedSalesId: req.user.id }),
+      ...(category && LEAD_CATEGORIES.includes(category) ? { category } : {}),
+      ...(status && VALID_STATUSES.includes(status) ? { status } : {}),
+      ...(term
+        ? {
+            OR: [
+              { leadNumber: { contains: term, mode: 'insensitive' } },
+              { organizationName: { contains: term, mode: 'insensitive' } },
+              { email: { contains: term, mode: 'insensitive' } },
+            ],
+          }
+        : {}),
+    };
+
+    const { page, limit, skip } = parsePagination(req.query);
+    const [items, total] = await Promise.all([
+      prisma.lead.findMany({
+        where,
+        include: creatorSelect,
+        orderBy: { createdAt: 'desc' },
+        skip,
+        take: limit,
+      }),
+      prisma.lead.count({ where }),
+    ]);
+
+    return res.json(paginatedResponse({ items: stripLeadsForRole(req.user, items), total, page, limit }));
+  } catch (error) {
+    console.error('[lead.getLeads]', error);
+    return res.status(500).json({ message: 'Failed to fetch leads.' });
+  }
+};
+
+/** GET /api/leads/:id */
+export const getLead = async (req, res) => {
+  try {
+    const lead = await prisma.lead.findUnique({
+      where: { id: req.params.id },
+      include: creatorSelect,
+    });
+    if (!lead) return res.status(404).json({ message: 'Lead not found.' });
+    // Sales users may only open their own leads; admins may open any.
+    if (!isAdmin(req.user) && lead.assignedSalesId !== req.user.id) {
+      return res.status(404).json({ message: 'Lead not found.' });
+    }
+    return res.json({ data: stripLeadForRole(req.user, lead) });
+  } catch (error) {
+    console.error('[lead.getLead]', error);
+    return res.status(500).json({ message: 'Failed to fetch lead.' });
+  }
+};
+
+/**
+ * PATCH /api/leads/:id/ip-details (SALES owner + admin) — network handover
+ * details captured at the docs stage: { irinnEmail, ipv4, ipv6 }.
+ */
+export const updateIpDetails = async (req, res) => {
+  try {
+    const lead = await prisma.lead.findUnique({
+      where: { id: req.params.id },
+      select: { id: true, assignedSalesId: true },
+    });
+    if (!lead) return res.status(404).json({ message: 'Lead not found.' });
+    if (!isAdmin(req.user) && lead.assignedSalesId !== req.user.id) {
+      return res.status(404).json({ message: 'Lead not found.' });
+    }
+
+    const result = validateIpDetails(req.body);
+    if (!result.ok) return res.status(400).json({ message: 'Validation failed.', errors: result.errors });
+
+    const updated = await prisma.lead.update({
+      where: { id: lead.id },
+      data: { ipDetails: result.data ?? prismaPkg.Prisma.DbNull },
+      select: { id: true, ipDetails: true },
+    });
+    await logEvent({
+      action: 'IP_DETAILS_UPDATED',
+      entityType: 'Lead',
+      entityId: lead.id,
+      summary: 'Updated IRINN email / IP details',
+      actor: actorFromReq(req),
+    });
+    return res.json({ message: 'Network details saved.', data: updated });
+  } catch (error) {
+    console.error('[lead.updateIpDetails]', error);
+    return res.status(500).json({ message: 'Failed to save network details.' });
+  }
+};
+
+/** PUT /api/leads/:id — update contact + requirementDetails (re-validated). */
+export const updateLead = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const existing = await prisma.lead.findUnique({ where: { id } });
+    if (!existing) return res.status(404).json({ message: 'Lead not found.' });
+
+    const result = validateLeadPayload(req.body);
+    if (!result.ok) {
+      return res.status(400).json({ message: 'Validation failed.', errors: result.errors });
+    }
+    const { category, requirementDetails, ...contact } = result.data;
+
+    const lead = await prisma.lead.update({
+      where: { id },
+      data: { category, requirementDetails, ...contact },
+      include: creatorSelect,
+    });
+
+    const changes = diffFields(existing, lead, LEAD_DIFF_FIELDS);
+    if (changes.length) {
+      const fieldNames = changes.map((c) => c.field).join(', ');
+      await logEvent({
+        action: 'LEAD_UPDATED',
+        entityType: 'Lead',
+        entityId: id,
+        summary: `Updated lead ${lead.leadNumber} (${fieldNames})`,
+        changes,
+        actor: actorFromReq(req),
+      });
+    }
+    return res.json({ message: 'Lead updated.', data: lead });
+  } catch (error) {
+    console.error('[lead.updateLead]', error);
+    return res.status(500).json({ message: 'Failed to update lead.' });
+  }
+};
