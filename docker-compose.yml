@@ -1,6 +1,7 @@
 # Operator CRM backend on the VM: Postgres + API in one stack.
-# Copy .env.docker.example → .env.docker, fill it in, then:
-#   docker compose up -d --build
+# Copy .env.docker.example → .env.docker, fill it in, then (the --env-file flag
+# is REQUIRED — env_file: inside services does not feed ${} interpolation):
+#   docker compose --env-file .env.docker up -d --build
 services:
   db:
     image: postgres:16-alpine
