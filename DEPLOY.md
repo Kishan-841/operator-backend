@@ -6,7 +6,7 @@ Backend → Docker on your VM · Frontend → Vercel.
 
 ```bash
 # on the VM, inside backend/
-cp .env.docker.example .env.docker   # fill in: POSTGRES_PASSWORD, JWT_SECRET, FRONTEND_URL, SEED_PASSWORD
+cp .env.docker.example .env   # fill in: POSTGRES_PASSWORD, JWT_SECRET, FRONTEND_URL, SEED_PASSWORD
 docker compose up -d --build
 ```
 
@@ -37,7 +37,7 @@ api.yourdomain.com {
 2. Environment variable: `NEXT_PUBLIC_API_URL=https://api.yourdomain.com/api`
    (must match how `frontend/lib/api.js` builds its base URL — same value the
    local `.env` uses, pointed at the VM).
-3. Deploy. Then make sure the backend's `FRONTEND_URL` in `.env.docker` is the
+3. Deploy. Then make sure the backend's `FRONTEND_URL` in `.env` is the
    exact Vercel origin (e.g. `https://operator-crm.vercel.app`) — CORS and
    socket.io only accept that origin — and `docker compose up -d` again.
 

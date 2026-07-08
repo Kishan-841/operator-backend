@@ -4,9 +4,19 @@ set -e
 # Derive DATABASE_URL from the compose-provided pieces when it isn't set
 # explicitly — keeps docker-compose.yml free of ${} interpolation so a plain
 # `docker compose up` works without --env-file.
+#
+# A DATABASE_URL pointing at localhost means a DEV .env leaked into the
+# container (inside a container, localhost is the container itself) — treat it
+# as unset and derive the real one instead of crash-looping.
+case "$DATABASE_URL" in
+  *@localhost*|*@127.0.0.1*)
+    echo "[entrypoint] WARN: DATABASE_URL points at localhost — that's a dev value; deriving the compose one instead." >&2
+    DATABASE_URL=""
+    ;;
+esac
 if [ -z "$DATABASE_URL" ]; then
   if [ -z "$POSTGRES_PASSWORD" ]; then
-    echo "[entrypoint] ERROR: set POSTGRES_PASSWORD (or a full DATABASE_URL) in .env.docker" >&2
+    echo "[entrypoint] ERROR: set POSTGRES_PASSWORD (or a full non-localhost DATABASE_URL) in .env" >&2
     exit 1
   fi
   export DATABASE_URL="postgresql://operator:${POSTGRES_PASSWORD}@${DB_HOST:-db}:5432/operator_crm?schema=public"
