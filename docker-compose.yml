@@ -1,15 +1,19 @@
-# Operator CRM backend on the VM: Postgres + API in one stack.
-# Copy .env.docker.example → .env.docker, fill it in, then (the --env-file flag
-# is REQUIRED — env_file: inside services does not feed ${} interpolation):
-#   docker compose --env-file .env.docker up -d --build
+# Operator CRM backend: Postgres + API in one stack.
+# Copy .env.docker.example → .env.docker, fill it in, then simply:
+#   docker compose up -d --build
+#
+# No ${} interpolation on purpose: every value flows through env_file into the
+# containers (the entrypoint derives DATABASE_URL from POSTGRES_PASSWORD), so
+# no --env-file flag or shell exports are ever needed.
 services:
   db:
     image: postgres:16-alpine
     restart: unless-stopped
+    # Provides POSTGRES_PASSWORD (postgres ignores the unrelated app vars).
+    env_file: .env.docker
     environment:
       POSTGRES_DB: operator_crm
       POSTGRES_USER: operator
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env.docker}
     volumes:
       - pgdata:/var/lib/postgresql/data
     healthcheck:
@@ -23,7 +27,9 @@ services:
     restart: unless-stopped
     env_file: .env.docker
     environment:
-      DATABASE_URL: postgresql://operator:${POSTGRES_PASSWORD}@db:5432/operator_crm?schema=public
+      # Compose-network DB host; the entrypoint builds DATABASE_URL from these
+      # + POSTGRES_PASSWORD unless a full DATABASE_URL is set in .env.docker.
+      DB_HOST: db
     ports:
       - '5003:5003'
     volumes:
