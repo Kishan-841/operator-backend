@@ -625,3 +625,15 @@ test('non-ISP pricing keeps the single rate + discount shape', async () => {
   assert.equal(r.status, 200);
   assert.equal(r.body.data.pricing.finalPrice, 9000);
 });
+
+// NOC L3 can close the handoff too (with a note) — not just the assigned L2.
+test('POST /:id/l3-to-l2 allows the NOC L3 user to mark the handoff completed', async () => {
+  const nocL3 = await login('NOC_L3_USER');
+  const lead = await createLead({ status: 'L3_TO_L2_HANDOFF' });
+  const r = await request('POST', `/api/leads/${lead.id}/l3-to-l2`, {
+    token: nocL3,
+    body: { notes: 'Verified with L2 on call — closing from L3 side' },
+  });
+  assert.equal(r.status, 200);
+  assert.equal(r.body.data.status, 'CLIENT_HANDOVER_PENDING');
+});

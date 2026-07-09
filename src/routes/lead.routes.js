@@ -119,7 +119,7 @@ router.post('/:id/noc-l2', requireRole('NOC_L2_USER'), completeNocL2);
 router.post('/:id/aggregator', requireRole('SALES_USER'), confirmAggregator);
 router.post('/:id/software', requireRole('SOFTWARE_USER'), completeSoftware);
 router.post('/:id/noc-l3', requireRole('NOC_L3_USER'), completeNocL3);
-router.post('/:id/l3-to-l2', requireRole('NOC_L2_USER'), completeL3ToL2);
+router.post('/:id/l3-to-l2', requireRole('NOC_L2_USER', 'NOC_L3_USER'), completeL3ToL2);
 router.post('/:id/l3-to-l2/assign', requireRole('NOC_L3_USER'), assignL3ToL2);
 router.post(
   '/:id/agreement/generate',
