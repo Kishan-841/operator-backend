@@ -8,7 +8,8 @@
  */
 export const REQUIRED_DOCS = {
   OPERATOR: [
-    'Aadhaar / PAN Card (Authorized Signatory)',
+    'Aadhaar Card (Authorized Signatory)',
+    'PAN Card (Authorized Signatory)',
     'GST Certificate',
     'Shop Act',
     'Authorization Letter',
@@ -18,7 +19,8 @@ export const REQUIRED_DOCS = {
     'GST Certificate',
     "Company's PAN Card",
     'Authorization Letter',
-    'Aadhaar & PAN Card (Authorized Signatory)',
+    'Aadhaar Card (Authorized Signatory)',
+    'PAN Card (Authorized Signatory)',
     'IP Allocation Details',
   ],
 };
