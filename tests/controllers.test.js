@@ -576,3 +576,52 @@ test('POST /:id/aggregator accepts BGP for an ISP lead end-to-end', async () => 
   assert.equal(r.status, 200);
   assert.equal(r.body.data.aggregatorType, 'BGP');
 });
+
+// ── ISP pricing: one price per bandwidth requirement, total = sum ─────────────
+test('ISP pricing takes per-requirement components and totals them server-side', async () => {
+  const lead = await createLead({
+    status: 'PRICING_PENDING',
+    requirementDetails: {
+      bandwidthMix: ['PEERING', 'ILL'],
+      bandwidthSpecs: { PEERING: { value: 10, unit: 'GB' }, ILL: { value: 1, unit: 'GB' } },
+    },
+  });
+  const r = await request('POST', `/api/leads/${lead.id}/pricing`, {
+    token: tokens.sales,
+    body: { pricing: { components: { PEERING: 120000, ILL: '55000' }, notes: 'combo deal' } },
+  });
+  assert.equal(r.status, 200);
+  assert.equal(r.body.data.pricing.ratePerMonth, 175000, 'rate = sum of components');
+  assert.equal(r.body.data.pricing.finalPrice, 175000);
+  assert.deepEqual(r.body.data.pricing.components, { PEERING: 120000, ILL: 55000 });
+});
+
+test('ISP pricing rejects a missing component price → 400 naming the requirement', async () => {
+  const lead = await createLead({
+    status: 'PRICING_PENDING',
+    requirementDetails: {
+      bandwidthMix: ['PEERING', 'ILL'],
+      bandwidthSpecs: { PEERING: { value: 10, unit: 'GB' }, ILL: { value: 1, unit: 'GB' } },
+    },
+  });
+  const r = await request('POST', `/api/leads/${lead.id}/pricing`, {
+    token: tokens.sales,
+    body: { pricing: { components: { PEERING: 120000 } } },
+  });
+  assert.equal(r.status, 400);
+  assert.ok(JSON.stringify(r.body.errors).includes('ILL'), 'names the unpriced requirement');
+});
+
+test('non-ISP pricing keeps the single rate + discount shape', async () => {
+  const lead = await createLead({
+    status: 'PRICING_PENDING',
+    category: 'PIN_RATE',
+    requirementDetails: { estimatedUserCount: 100, ratePerUser: 40 },
+  });
+  const r = await request('POST', `/api/leads/${lead.id}/pricing`, {
+    token: tokens.sales,
+    body: { pricing: { ratePerMonth: 10000, discountPercentage: 10 } },
+  });
+  assert.equal(r.status, 200);
+  assert.equal(r.body.data.pricing.finalPrice, 9000);
+});

@@ -1,4 +1,5 @@
 import * as sm from '../services/leadStateMachine.js';
+import prisma from '../config/db.js';
 import { validatePricing } from '../validation/pricing.js';
 import { validateFeasibilityVendors } from '../validation/feasibilityVendors.js';
 import { validateMaterialReq } from '../validation/stage4.js';
@@ -100,7 +101,15 @@ export const completeFeasibility = async (req, res) => {
 /** POST /api/leads/:id/pricing (SALES_USER) { pricing } */
 export const submitPricing = async (req, res) => {
   try {
-    const result = validatePricing(req.body?.pricing ?? req.body);
+    // ISP leads are priced per bandwidth requirement — the validator needs the
+    // lead's selected mix to demand one amount per requirement.
+    const lead = await prisma.lead.findUnique({
+      where: { id: req.params.id },
+      select: { category: true, requirementDetails: true },
+    });
+    if (!lead) return res.status(404).json({ message: 'Lead not found.' });
+    const bandwidthMix = lead.category === 'ISP' ? lead.requirementDetails?.bandwidthMix ?? [] : null;
+    const result = validatePricing(req.body?.pricing ?? req.body, bandwidthMix);
     if (!result.ok) {
       return res.status(400).json({ message: 'Invalid pricing.', errors: result.errors });
     }
