@@ -564,3 +564,15 @@ test("PUT /api/leads/:id is owner-scoped — another sales user's lead → 404",
   assert.equal(ok.status, 200);
   assert.equal(ok.body.data.organizationName, 'Renamed by owner');
 });
+
+// Regression: BGP passed the state machine but the controller's Zod enum
+// (validation/stage5.js) still rejected it — test the full HTTP path.
+test('POST /:id/aggregator accepts BGP for an ISP lead end-to-end', async () => {
+  const lead = await createLead({ status: 'AGGREGATOR_CONFIRM_PENDING' }); // ISP default
+  const r = await request('POST', `/api/leads/${lead.id}/aggregator`, {
+    token: tokens.sales,
+    body: { aggregatorType: 'BGP', remark: 'BGP session' },
+  });
+  assert.equal(r.status, 200);
+  assert.equal(r.body.data.aggregatorType, 'BGP');
+});

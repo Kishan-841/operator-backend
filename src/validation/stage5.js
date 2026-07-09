@@ -4,7 +4,9 @@ const flatten = (error) =>
   error.issues.map((i) => ({ path: i.path.join('.'), message: i.message }));
 
 const aggregatorSchema = z.object({
-  aggregatorType: z.enum(['BNG', 'MIKROTIK']),
+  // BGP is ISP-only — the state machine enforces that per-category rule; this
+  // shape check just admits the known types.
+  aggregatorType: z.enum(['BNG', 'MIKROTIK', 'BGP']),
   // Optional handoff note — normalise empty/missing to undefined.
   remark: z.preprocess(
     (v) => (typeof v === 'string' && v.trim() === '' ? undefined : v),
