@@ -435,6 +435,31 @@ export const rejectDocs = async ({ leadId, actor, reason }) => {
 // Stage 6: delivery raises a catalog-driven material request → admin approval.
 // Reuses the lead's single DeliveryRequest (1:1) — a resubmit after rejection
 // replaces its items and returns it to PENDING_APPROVAL rather than duplicating.
+// Stage 6 shortcut: some jobs need no material at all (config-only, client
+// hardware). Skip requisition → approval → dispatch and land the lead straight
+// in the installation queue, with the reason on the timeline.
+export const skipMaterialReq = async ({ leadId, actor, reason }) => {
+  const lead = await loadLead(leadId);
+  if (lead.status !== 'DELIVERY_REQ_PENDING') {
+    throw httpError(409, 'This lead is not currently awaiting a material request. Refresh to see where it is now.');
+  }
+
+  const updated = await applyTransition(leadId, 'DELIVERY_REQ_PENDING', { status: 'DISPATCHED' });
+
+  const note = `Material not required${String(reason || '').trim() ? ` — ${String(reason).trim()}` : ''}`;
+  await addLeadNote({ leadId, stage: 'DELIVERY', body: note, actor });
+  await logStatusChange({
+    entityType: 'Lead',
+    entityId: leadId,
+    oldValue: lead.status,
+    newValue: 'DISPATCHED',
+    actor,
+    reason: note,
+  });
+  await refreshSidebarForRoles(['DELIVERY_USER', 'STORE_USER', ...ADMIN_ROLES]);
+  return updated;
+};
+
 export const submitMaterialReq = async ({ leadId, actor, items, deliveryAddress, notes, urgency }) => {
   const lead = await loadLead(leadId);
   if (lead.status !== 'DELIVERY_REQ_PENDING') {

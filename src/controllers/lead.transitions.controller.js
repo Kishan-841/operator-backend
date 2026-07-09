@@ -155,6 +155,20 @@ export const completeDocs = async (req, res) => {
   }
 };
 
+/** POST /api/leads/:id/skip-material (DELIVERY) { reason? } — no material needed. */
+export const skipMaterialReq = async (req, res) => {
+  try {
+    const data = await sm.skipMaterialReq({
+      leadId: req.params.id,
+      actor: actorFromReq(req),
+      reason: req.body?.reason,
+    });
+    return res.json({ message: 'Marked as no material required — moved to installation.', data });
+  } catch (error) {
+    return fail(res, error);
+  }
+};
+
 /** POST /api/leads/:id/material-req (DELIVERY) { items:[{productId,quantity}], deliveryAddress?, urgency?, notes? } */
 export const submitMaterialReq = async (req, res) => {
   try {

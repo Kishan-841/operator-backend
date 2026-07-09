@@ -790,3 +790,24 @@ test('completeSoftware requires a valid managedBy → 400', async () => {
     400,
   );
 });
+
+// ── Stage 6: some leads need no material at all ──────────────────────────────
+test('skipMaterialReq jumps straight to the installation queue (DISPATCHED)', async () => {
+  const lead = await createLead({ status: 'DELIVERY_REQ_PENDING' });
+  const updated = await sm.skipMaterialReq({
+    leadId: lead.id,
+    actor: actor('DELIVERY_USER'),
+    reason: 'Config-only job, existing hardware',
+  });
+  assert.equal(updated.status, 'DISPATCHED');
+  const notes = await prisma.leadNote.findMany({ where: { leadId: lead.id, stage: 'DELIVERY' } });
+  assert.ok(notes.some((n) => n.body.includes('Material not required')), 'skip reason recorded');
+});
+
+test('skipMaterialReq from a wrong status → 409', async () => {
+  const lead = await createLead({ status: 'AWAITING_DISPATCH' });
+  await rejectsWithStatus(
+    () => sm.skipMaterialReq({ leadId: lead.id, actor: actor('DELIVERY_USER'), reason: '' }),
+    409,
+  );
+});

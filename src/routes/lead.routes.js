@@ -30,6 +30,7 @@ import {
   submitDocsForVerification,
   completeDocs,
   submitMaterialReq,
+  skipMaterialReq,
   approveMaterialRequest,
   rejectMaterialRequest,
   assignMaterial,
@@ -107,6 +108,7 @@ router.post('/:id/complete-docs', requireRole('SOFTWARE_USER'), completeDocs);
 
 // --- Stage 6 + 7 transitions ---
 router.post('/:id/material-req', requireRole('DELIVERY_USER'), submitMaterialReq);
+router.post('/:id/skip-material', requireRole('DELIVERY_USER'), skipMaterialReq);
 router.post('/:id/approve-material', requireRole('SUPER_ADMIN', 'ADMIN'), approveMaterialRequest);
 router.post('/:id/reject-material', requireRole('SUPER_ADMIN', 'ADMIN'), rejectMaterialRequest);
 router.post('/:id/assign-material', requireRole('STORE_USER'), assignMaterial);
