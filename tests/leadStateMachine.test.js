@@ -760,11 +760,9 @@ test('completeSoftware managed by SOFTWARE stores the portal credentials', async
 });
 
 test('completeSoftware managed by ISP never stores credentials, even if sent', async () => {
-  const lead = await createLead({
-    status: 'SOFTWARE_PENDING',
-    category: 'PIN_RATE',
-    requirementDetails: { estimatedUserCount: 100, ratePerUser: 40 },
-  });
+  // Self-managed portals only exist for ISP-category leads (non-ISP is always
+  // software-managed, the choice isn't asked).
+  const lead = await createLead({ status: 'SOFTWARE_PENDING' }); // helper default = ISP
   const updated = await sm.completeSoftware({
     leadId: lead.id,
     actor: actor('SOFTWARE_USER'),
@@ -776,7 +774,7 @@ test('completeSoftware managed by ISP never stores credentials, even if sent', a
   assert.equal(updated.portalUsername, null);
   assert.equal(updated.portalUrl, null);
   assert.equal(updated.portalPassword, null);
-  assert.equal(updated.status, 'NOC_L3_PENDING');
+  assert.equal(updated.status, 'CLIENT_HANDOVER_PENDING'); // ISP skips NOC L3
 });
 
 test('completeSoftware requires a valid managedBy → 400', async () => {
@@ -810,4 +808,21 @@ test('skipMaterialReq from a wrong status → 409', async () => {
     () => sm.skipMaterialReq({ leadId: lead.id, actor: actor('DELIVERY_USER'), reason: '' }),
     409,
   );
+});
+
+test('completeSoftware on a non-ISP lead needs no managedBy — software-managed by definition', async () => {
+  const lead = await createLead({
+    status: 'SOFTWARE_PENDING',
+    category: 'PIN_RATE',
+    requirementDetails: { estimatedUserCount: 100, ratePerUser: 40 },
+  });
+  const updated = await sm.completeSoftware({
+    leadId: lead.id,
+    actor: actor('SOFTWARE_USER'),
+    portalUsername: 'pinco',
+    portalPassword: 'pw',
+  });
+  assert.equal(updated.portalManagedBy, 'SOFTWARE');
+  assert.equal(updated.portalUsername, 'pinco');
+  assert.equal(updated.status, 'NOC_L3_PENDING');
 });

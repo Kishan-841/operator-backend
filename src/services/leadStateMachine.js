@@ -827,18 +827,19 @@ export const confirmAggregator = async ({ leadId, actor, aggregatorType, remark 
 
 // Stage 11: software portal/migration/IP-pool notice → NOC L3.
 export const completeSoftware = async ({ leadId, actor, managedBy, portalUsername, portalUrl, portalPassword, notes }) => {
-  // Who runs the operator's portal: our software team (we record the
-  // credentials) or the ISP themselves (no credentials to capture — and none
-  // are stored even if sent).
-  if (!['ISP', 'SOFTWARE'].includes(managedBy)) {
-    throw httpError(400, 'Pick who manages the portal — ISP or the software team.');
-  }
-  const softwareManaged = managedBy === 'SOFTWARE';
-
   // ISP leads carry their own routing (their AS number / BGP session) — no NOC
   // L3 IP allocation and no L3→L2 handoff. They jump straight to client handover.
   const { category } = await loadLead(leadId);
   const isIsp = category === 'ISP';
+
+  // Who runs the operator's portal: only ISPs may self-manage (then no
+  // credentials are captured — or stored, even if sent). Every other category
+  // is software-managed by definition, so no choice is asked for.
+  const effectiveManagedBy = isIsp ? managedBy : 'SOFTWARE';
+  if (!['ISP', 'SOFTWARE'].includes(effectiveManagedBy)) {
+    throw httpError(400, 'Pick who manages the portal — ISP or the software team.');
+  }
+  const softwareManaged = effectiveManagedBy === 'SOFTWARE';
   return advance({
     leadId,
     actor,
@@ -846,7 +847,7 @@ export const completeSoftware = async ({ leadId, actor, managedBy, portalUsernam
     to: isIsp ? 'CLIENT_HANDOVER_PENDING' : 'NOC_L3_PENDING',
     data: (lead) => ({
       softwareAssignedToId: actor.id,
-      portalManagedBy: managedBy,
+      portalManagedBy: effectiveManagedBy,
       portalUsername: softwareManaged ? portalUsername?.trim() || null : null,
       portalUrl: softwareManaged ? portalUrl?.trim() || null : null,
       portalPassword: softwareManaged ? portalPassword ?? null : null,
