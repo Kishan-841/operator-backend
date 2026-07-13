@@ -7,6 +7,7 @@ import { assertLeadAccess } from '../utils/leadAccess.js';
 import { AGREEMENT_DOC_TYPE } from '../utils/documentTypes.js';
 import { missingRequiredDocs } from '../utils/docRequirements.js';
 import { generateDeliveryRequestNumber } from './leadNumber.service.js';
+import { NOC_L3_FIELD_KEYS } from '../utils/nocL3Fields.js';
 
 // Append to a delivery request's audit trail. Soft-fail — never break the flow.
 const logDeliveryRequest = async ({ deliveryRequestId, action, actor, details = null }) => {
@@ -804,20 +805,22 @@ export const completeNocL2 = ({ leadId, actor, configNotes, config }) =>
     noteStage: 'NOC_L2',
   });
 
-// Stage 10: sales confirms aggregator (remark required) → software.
-export const confirmAggregator = async ({ leadId, actor, aggregatorType, remark }) => {
+// Stage 10: sales confirms one or more aggregators (remark optional) → software.
+export const confirmAggregator = async ({ leadId, actor, aggregatorTypes, remark }) => {
   // BGP is an ISP-only aggregator option; BNG/Mikrotik apply to every category.
   const { category } = await loadLead(leadId);
   const allowed = ['BNG', 'MIKROTIK', ...(category === 'ISP' ? ['BGP'] : [])];
-  if (!allowed.includes(aggregatorType)) {
-    throw httpError(400, `Pick a valid aggregator type (${allowed.join(' / ')}).`);
+  const types = [...new Set(Array.isArray(aggregatorTypes) ? aggregatorTypes : [])];
+  if (!types.length || types.some((t) => !allowed.includes(t))) {
+    throw httpError(400, `Pick valid aggregator types (${allowed.join(' / ')}).`);
   }
   return advance({
     leadId,
     actor,
     from: 'AGGREGATOR_CONFIRM_PENDING',
     to: 'SOFTWARE_PENDING',
-    data: { aggregatorType, aggregatorConfirmRemark: remark },
+    // aggregatorType mirrors the first selection so legacy readers keep working.
+    data: { aggregatorTypes: types, aggregatorType: types[0], aggregatorConfirmRemark: remark },
     notifyRole: 'SOFTWARE_USER',
     notifyTitle: 'ready for software setup',
     outgoing: ['SALES_USER'],
@@ -864,18 +867,43 @@ export const completeSoftware = async ({ leadId, actor, managedBy, portalUsernam
   });
 };
 
-// Stage 12: NOC L3 IP allocation + BNG config → L3→L2 handoff.
-export const completeNocL3 = ({ leadId, actor, ipAllocation }) =>
-  advance({
+// Stage 12: NOC L3 IP allocation + BNG config → L3→L2 handoff. Every
+// aggregator selected at stage 10 must have a complete config section.
+export const completeNocL3 = async ({ leadId, actor, ipAllocation }) => {
+  const lead = await loadLead(leadId);
+  // Stage check first so a stale tab gets the conventional 409, not a
+  // confusing config-validation 400 for a lead that already moved on.
+  if (lead.status !== 'NOC_L3_PENDING') {
+    throw httpError(409, 'This lead is no longer awaiting NOC L3 — someone already completed it.');
+  }
+  const selected = lead.aggregatorTypes?.length
+    ? lead.aggregatorTypes
+    : lead.aggregatorType
+      ? [lead.aggregatorType]
+      : ['MIKROTIK'];
+  const alloc = ipAllocation && typeof ipAllocation === 'object' ? ipAllocation : {};
+  for (const type of selected) {
+    const required = NOC_L3_FIELD_KEYS[type] || [];
+    const section = alloc[type];
+    const missing = !section || required.some((k) => !String(section[k] ?? '').trim());
+    if (missing) {
+      throw httpError(400, `Complete the ${type} configuration before saving.`);
+    }
+  }
+  // Store only the selected types' sections — extra known-type sections in the
+  // payload were never validated for completeness, so don't persist them.
+  const stored = Object.fromEntries(selected.map((t) => [t, alloc[t]]));
+  return advance({
     leadId,
     actor,
     from: 'NOC_L3_PENDING',
     to: 'L3_TO_L2_HANDOFF',
-    data: { nocL3AssignedToId: actor.id, ipAllocation, bngConfigDoneAt: new Date() },
+    data: { nocL3AssignedToId: actor.id, ipAllocation: stored, bngConfigDoneAt: new Date() },
     notifyRole: 'NOC_L2_USER',
     notifyTitle: 'L3→L2 assignment ready',
     outgoing: ['NOC_L3_USER'],
   });
+};
 
 // Stage 13 routing: NOC L3 assigns (or reassigns) the handoff to a specific NOC
 // L2 user. Not a status transition — the lead stays at L3_TO_L2_HANDOFF and can

@@ -260,6 +260,7 @@ model Lead {
   nocL2Config       Json?
 
   aggregatorType          String? // 'BNG' | 'MIKROTIK' (extend as needed)
+  aggregatorTypes         String[] @default([]) // multi-select at stage 10; aggregatorType mirrors [0] for legacy readers
   aggregatorConfirmRemark String? // §3 stage-10 handoff remark
 
   softwareAssignedToId String?

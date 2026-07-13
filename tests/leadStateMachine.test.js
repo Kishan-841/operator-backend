@@ -680,13 +680,17 @@ test('a lead walks the full pipeline NEW → COMPLETED', async () => {
   await sm.completeNocL2({ leadId: lead.id, actor: actor('NOC_L2_USER'), configNotes: 'vlan set' });
   assert.equal(await status(lead.id), 'AGGREGATOR_CONFIRM_PENDING');
 
-  await sm.confirmAggregator({ leadId: lead.id, actor: actor('SALES_USER'), aggregatorType: 'BNG', remark: 'ok' });
+  await sm.confirmAggregator({ leadId: lead.id, actor: actor('SALES_USER'), aggregatorTypes: ['BNG'], remark: 'ok' });
   assert.equal(await status(lead.id), 'SOFTWARE_PENDING');
 
   await sm.completeSoftware({ leadId: lead.id, actor: actor('SOFTWARE_USER'), managedBy: 'SOFTWARE', portalUsername: 'acme' });
   assert.equal(await status(lead.id), 'NOC_L3_PENDING');
 
-  await sm.completeNocL3({ leadId: lead.id, actor: actor('NOC_L3_USER'), ipAllocation: { subnet: '10.0.0.0/24' } });
+  await sm.completeNocL3({
+    leadId: lead.id,
+    actor: actor('NOC_L3_USER'),
+    ipAllocation: { BNG: { mikrotikIp: '10.0.0.2', mikrotikIdentity: 'MK-1', loopbackIp: '10.255.0.1', vsi: 'VSI-201' } },
+  });
   assert.equal(await status(lead.id), 'L3_TO_L2_HANDOFF');
 
   await sm.completeL3ToL2({ leadId: lead.id, actor: actor('NOC_L2_USER'), notes: 'assigned' });
@@ -700,6 +704,47 @@ test('a lead walks the full pipeline NEW → COMPLETED', async () => {
   await addDocument(lead.id, 'AGREEMENT');
   await sm.verifyAgreement({ leadId: lead.id, actor: actor('SOFTWARE_USER') });
   assert.equal(await status(lead.id), 'COMPLETED');
+});
+
+// ── Stage 12: per-aggregator NOC L3 config completeness ─────────────────────
+test('completeNocL3 requires a complete config per selected aggregator', async () => {
+  const lead = await createLead({
+    status: 'NOC_L3_PENDING',
+    category: 'PIN_RATE',
+    requirementDetails: {},
+    aggregatorTypes: ['BNG', 'MIKROTIK'],
+    aggregatorType: 'BNG',
+  });
+  const bng = { mikrotikIp: '10.0.0.2', mikrotikIdentity: 'MK-1', loopbackIp: '10.255.0.1', vsi: 'VSI-201' };
+  // MIKROTIK config missing entirely → 400
+  await rejectsWithStatus(
+    () => sm.completeNocL3({ leadId: lead.id, actor: actor('NOC_L3_USER'), ipAllocation: { BNG: bng } }),
+    400,
+  );
+  // MIKROTIK config incomplete (one required key blank) → 400
+  const mkPartial = { mikrotikIdentity: 'MK-2', mikrotikIp: '10.0.0.3', mikrotikGateway: '10.0.0.1', snatPool: '100.64.0.0/22', dynamicPool: '' };
+  await rejectsWithStatus(
+    () => sm.completeNocL3({ leadId: lead.id, actor: actor('NOC_L3_USER'), ipAllocation: { BNG: bng, MIKROTIK: mkPartial } }),
+    400,
+  );
+  // Both complete → advances and stores the nested shape
+  const mk = { mikrotikIdentity: 'MK-2', mikrotikIp: '10.0.0.3', mikrotikGateway: '10.0.0.1', snatPool: '100.64.0.0/22', dynamicPool: '10.10.0.0/16', vlan: '100' };
+  const updated = await sm.completeNocL3({ leadId: lead.id, actor: actor('NOC_L3_USER'), ipAllocation: { BNG: bng, MIKROTIK: mk } });
+  assert.equal(updated.status, 'L3_TO_L2_HANDOFF');
+  assert.deepEqual(Object.keys(updated.ipAllocation).sort(), ['BNG', 'MIKROTIK']);
+  assert.equal(updated.ipAllocation.MIKROTIK.vlan, '100');
+});
+
+test('completeNocL3 legacy lead (single aggregatorType, no array) needs just that config', async () => {
+  const lead = await createLead({
+    status: 'NOC_L3_PENDING',
+    category: 'PIN_RATE',
+    requirementDetails: {},
+    aggregatorType: 'BNG',
+  });
+  const bng = { mikrotikIp: '10.0.0.2', mikrotikIdentity: 'MK-1', loopbackIp: '10.255.0.1', vsi: 'VSI-201' };
+  const updated = await sm.completeNocL3({ leadId: lead.id, actor: actor('NOC_L3_USER'), ipAllocation: { BNG: bng } });
+  assert.equal(updated.status, 'L3_TO_L2_HANDOFF');
 });
 
 // ── Concurrency regression: the fix from the audit ──────────────────────────
@@ -732,7 +777,7 @@ test('confirmAggregator accepts BGP for an ISP lead', async () => {
   const updated = await sm.confirmAggregator({
     leadId: lead.id,
     actor: actor('SALES_USER'),
-    aggregatorType: 'BGP',
+    aggregatorTypes: ['BGP'],
     remark: 'BGP session with client AS',
   });
   assert.equal(updated.aggregatorType, 'BGP');
@@ -746,7 +791,7 @@ test('confirmAggregator rejects BGP for a non-ISP lead → 400', async () => {
     requirementDetails: { estimatedUserCount: 100, ratePerUser: 40 },
   });
   await rejectsWithStatus(
-    () => sm.confirmAggregator({ leadId: lead.id, actor: actor('SALES_USER'), aggregatorType: 'BGP', remark: 'x' }),
+    () => sm.confirmAggregator({ leadId: lead.id, actor: actor('SALES_USER'), aggregatorTypes: ['BGP'], remark: 'x' }),
     400,
   );
 });
@@ -754,9 +799,44 @@ test('confirmAggregator rejects BGP for a non-ISP lead → 400', async () => {
 test('confirmAggregator rejects an unknown aggregator type → 400', async () => {
   const lead = await createLead({ status: 'AGGREGATOR_CONFIRM_PENDING' });
   await rejectsWithStatus(
-    () => sm.confirmAggregator({ leadId: lead.id, actor: actor('SALES_USER'), aggregatorType: 'CISCO', remark: 'x' }),
+    () => sm.confirmAggregator({ leadId: lead.id, actor: actor('SALES_USER'), aggregatorTypes: ['CISCO'], remark: 'x' }),
     400,
   );
+});
+
+test('confirmAggregator stores multiple types and mirrors the first into aggregatorType', async () => {
+  const lead = await createLead({ status: 'AGGREGATOR_CONFIRM_PENDING', category: 'PIN_RATE', requirementDetails: {} });
+  const updated = await sm.confirmAggregator({
+    leadId: lead.id,
+    actor: actor('SALES_USER'),
+    aggregatorTypes: ['BNG', 'MIKROTIK'],
+    remark: 'both needed',
+  });
+  assert.equal(updated.status, 'SOFTWARE_PENDING');
+  assert.deepEqual(updated.aggregatorTypes, ['BNG', 'MIKROTIK']);
+  assert.equal(updated.aggregatorType, 'BNG'); // legacy mirror
+});
+
+test('confirmAggregator rejects BGP for a non-ISP lead and empty selections', async () => {
+  const lead = await createLead({ status: 'AGGREGATOR_CONFIRM_PENDING', category: 'PIN_RATE', requirementDetails: {} });
+  await rejectsWithStatus(
+    () => sm.confirmAggregator({ leadId: lead.id, actor: actor('SALES_USER'), aggregatorTypes: ['BNG', 'BGP'] }),
+    400,
+  );
+  await rejectsWithStatus(
+    () => sm.confirmAggregator({ leadId: lead.id, actor: actor('SALES_USER'), aggregatorTypes: [] }),
+    400,
+  );
+});
+
+test('confirmAggregator dedupes repeated selections', async () => {
+  const lead = await createLead({ status: 'AGGREGATOR_CONFIRM_PENDING' }); // ISP default
+  const updated = await sm.confirmAggregator({
+    leadId: lead.id,
+    actor: actor('SALES_USER'),
+    aggregatorTypes: ['BGP', 'BGP', 'BNG'],
+  });
+  assert.deepEqual(updated.aggregatorTypes, ['BGP', 'BNG']);
 });
 
 // ── ISP shortcut: no NOC L3, no L3→L2 handoff ────────────────────────────────

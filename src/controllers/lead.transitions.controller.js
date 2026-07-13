@@ -286,7 +286,7 @@ export const completeNocL2 = async (req, res) => {
   }
 };
 
-/** POST /api/leads/:id/aggregator (SALES) { aggregatorType, remark } */
+/** POST /api/leads/:id/aggregator (SALES) { aggregatorTypes: string[], remark? } (legacy single aggregatorType accepted) */
 export const confirmAggregator = async (req, res) => {
   try {
     const result = validateAggregator(req.body);
@@ -334,7 +334,7 @@ export const completeSoftware = async (req, res) => {
   }
 };
 
-/** POST /api/leads/:id/noc-l3 (NOC_L3) { subnet, gateway, vlanId } */
+/** POST /api/leads/:id/noc-l3 (NOC_L3) { <AGGREGATOR>: { <fieldKey>: value } } — one section per type selected at stage 10 */
 export const completeNocL3 = async (req, res) => {
   try {
     const result = validateIpAllocation(req.body);
