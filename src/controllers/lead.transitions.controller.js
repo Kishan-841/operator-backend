@@ -55,6 +55,17 @@ export const completeFeasibility = async (req, res) => {
       return res.status(400).json({ message: 'Latitude/longitude are out of range.' });
     }
 
+    // Optional estimated delivery date (feasible path) — reject garbage early.
+    const estRaw = req.body?.estimatedDeliveryAt;
+    let estimatedDeliveryAt;
+    if (estRaw !== undefined && estRaw !== null && estRaw !== '') {
+      const d = new Date(estRaw);
+      if (Number.isNaN(d.getTime())) {
+        return res.status(400).json({ message: 'estimatedDeliveryAt must be a valid date.' });
+      }
+      estimatedDeliveryAt = d;
+    }
+
     // Multiple POPs: array of ids (falls back to the legacy single popLocationId).
     const popIds = Array.isArray(req.body?.pops)
       ? req.body.pops.filter((x) => typeof x === 'string')
@@ -91,6 +102,7 @@ export const completeFeasibility = async (req, res) => {
       longitude,
       networkType: networkType ?? null,
       offNet,
+      estimatedDeliveryAt,
     });
     return res.json({ message: 'Feasibility recorded.', data });
   } catch (error) {

@@ -60,6 +60,43 @@ test('completeFeasibility (feasible) → PRICING_PENDING and records review', as
   assert.equal(notes[0].body, 'looks good');
 });
 
+test('completeFeasibility (feasible) stores an estimated delivery date', async () => {
+  const lead = await createLead({ status: 'FEASIBILITY_PENDING' });
+  const est = new Date('2026-08-01T00:00:00.000Z');
+  const updated = await sm.completeFeasibility({
+    leadId: lead.id,
+    actor: actor('FEASIBILITY_USER'),
+    feasible: true,
+    vendors: [{ kind: 'OWN', fiberMeters: 500 }],
+    estimatedDeliveryAt: est,
+  });
+  assert.equal(updated.estimatedDeliveryAt?.toISOString(), est.toISOString());
+});
+
+test('completeFeasibility (feasible) without a date leaves it null (optional)', async () => {
+  const lead = await createLead({ status: 'FEASIBILITY_PENDING' });
+  const updated = await sm.completeFeasibility({
+    leadId: lead.id,
+    actor: actor('FEASIBILITY_USER'),
+    feasible: true,
+    vendors: [{ kind: 'OWN', fiberMeters: 500 }],
+  });
+  assert.equal(updated.estimatedDeliveryAt, null);
+});
+
+test('completeFeasibility (not feasible) ignores a supplied delivery date', async () => {
+  const lead = await createLead({ status: 'FEASIBILITY_PENDING' });
+  const updated = await sm.completeFeasibility({
+    leadId: lead.id,
+    actor: actor('FEASIBILITY_USER'),
+    feasible: false,
+    notes: 'no fiber path',
+    estimatedDeliveryAt: new Date('2026-08-01T00:00:00.000Z'),
+  });
+  assert.equal(updated.status, 'REJECTED');
+  assert.equal(updated.estimatedDeliveryAt, null);
+});
+
 test('completeFeasibility (feasible) snapshots a vendor segment name + type + path', async () => {
   const lead = await createLead({ status: 'FEASIBILITY_PENDING' });
   const vendor = await prisma.vendor.create({ data: { type: 'FIBER', name: 'Acme Fiber' } });

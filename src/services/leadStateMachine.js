@@ -142,6 +142,7 @@ export const completeFeasibility = async ({
   longitude,
   networkType,
   offNet,
+  estimatedDeliveryAt,
 }) => {
   const lead = await loadLead(leadId);
   if (lead.status !== 'FEASIBILITY_PENDING') {
@@ -188,6 +189,7 @@ export const completeFeasibility = async ({
           popLocationId: primaryPopId,
           ...(latitude !== undefined ? { latitude } : {}),
           ...(longitude !== undefined ? { longitude } : {}),
+          ...(estimatedDeliveryAt !== undefined ? { estimatedDeliveryAt } : {}),
         }
       : { rejectedReason: notes }),
   });

@@ -218,6 +218,7 @@ model Lead {
   // [{ kind: 'OWN'|'VENDOR'|'CLIENT', vendorId?, vendorName?, vendorType?, clientName?, fiberMeters, path?: { a:{lat,lng}, b:{lat,lng} } }]
   feasibilityVendors      Json?
   feasibilityReviewedAt   DateTime?
+  estimatedDeliveryAt     DateTime? // set (optionally) at feasibility; shown to delivery
   // POP selected during feasibility (reusable master, see PopLocation).
   popLocationId           String?
   popLocation             PopLocation? @relation(fields: [popLocationId], references: [id])
@@ -300,6 +301,7 @@ model Lead {
   @@index([feasibilityAssignedToId, status])
   @@index([nocL2AssignedToId, status])
   @@index([nocL3AssignedToId, status])
+  @@index([l3ToL2AssignedToId, status])
   @@index([softwareAssignedToId, status])
   @@index([createdById])
   @@index([createdAt])
