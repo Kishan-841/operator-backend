@@ -3,6 +3,7 @@ import { parsePagination, paginatedResponse } from '../utils/pagination.js';
 import { validatePurchaseOrder, validateAddToInventory } from '../validation/purchaseOrder.js';
 import { generatePurchaseOrderNumber } from '../services/leadNumber.service.js';
 import { logEvent } from '../services/statusChangeLog.service.js';
+import { refreshSidebarForRoles } from '../services/notification.service.js';
 import { actorFromReq } from '../utils/requestContext.js';
 
 const PO_STATUSES = ['PENDING_ADMIN', 'APPROVED', 'REJECTED', 'COMPLETED'];
@@ -93,6 +94,7 @@ export const createPurchaseOrder = async (req, res) => {
       summary: `Created purchase order ${po.poNumber} (${items.length} item${items.length === 1 ? '' : 's'})`,
       actor: actorFromReq(req),
     });
+    await refreshSidebarForRoles(['SUPER_ADMIN', 'ADMIN']); // PO Approvals badge
     return res.status(201).json({ message: 'Purchase order created.', data: po });
   } catch (error) {
     console.error('[po.create]', error);
@@ -120,6 +122,7 @@ export const approvePurchaseOrder = async (req, res) => {
       summary: `Approved purchase order ${po.poNumber}`,
       actor: actorFromReq(req),
     });
+    await refreshSidebarForRoles(['SUPER_ADMIN', 'ADMIN']);
     return res.json({ message: 'Purchase order approved.', data: updated });
   } catch (error) {
     console.error('[po.approve]', error);
@@ -149,6 +152,7 @@ export const rejectPurchaseOrder = async (req, res) => {
       summary: `Rejected purchase order ${po.poNumber} — ${reason}`,
       actor: actorFromReq(req),
     });
+    await refreshSidebarForRoles(['SUPER_ADMIN', 'ADMIN']);
     return res.json({ message: 'Purchase order rejected.', data: updated });
   } catch (error) {
     console.error('[po.reject]', error);

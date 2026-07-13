@@ -2,6 +2,7 @@ import prisma from '../config/db.js';
 import { parsePagination, paginatedResponse } from '../utils/pagination.js';
 import { salesOwnerScope } from '../utils/leadAccess.js';
 import { stripLeadsForRole } from '../utils/leadVisibility.js';
+import { isAdmin } from '../utils/roleHelper.js';
 
 const withCreator = {
   createdBy: { select: { id: true, name: true } },
@@ -115,6 +116,22 @@ export const sidebarCounts = async (req, res) => {
     const byStatus = Object.fromEntries(grouped.map((g) => [g.status, g._count._all]));
     const sumOf = (s) => (Array.isArray(s) ? s.reduce((n, v) => n + (byStatus[v] || 0), 0) : byStatus[s] || 0);
     const counts = Object.fromEntries(Object.entries(statuses).map(([k, s]) => [k, sumOf(s)]));
+
+    // The L3→L2 queue shows an L2 user only their assigned handoffs
+    // (l3ToL2Queue above) — the badge must count the same rows.
+    if (req.user?.role === 'NOC_L2_USER') {
+      counts.l3ToL2Pending = await prisma.lead.count({
+        where: { status: 'L3_TO_L2_HANDOFF', l3ToL2AssignedToId: req.user.id },
+      });
+    }
+
+    // PO approvals live outside the lead pipeline; the tab is admin-only.
+    if (isAdmin(req.user)) {
+      counts.poApprovalPending = await prisma.storePurchaseOrder.count({
+        where: { status: 'PENDING_ADMIN' },
+      });
+    }
+
     return res.json({ counts });
   } catch (error) {
     console.error('[lead.sidebarCounts]', error);

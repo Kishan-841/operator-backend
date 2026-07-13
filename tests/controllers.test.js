@@ -2,7 +2,7 @@ import { test, before, beforeEach, after } from 'node:test';
 import assert from 'node:assert/strict';
 import bcrypt from 'bcryptjs';
 import app from '../src/app.js';
-import { prisma, seedUsers, cleanup, createLead, addDocument, addApprovedDocument, TEST_PASSWORD } from './helpers.mjs';
+import { prisma, seedUsers, cleanup, createLead, addDocument, addApprovedDocument, TEST_PASSWORD, userId } from './helpers.mjs';
 
 // ── HTTP harness: run the real app on an ephemeral port, talk to it over fetch ──
 let server;
@@ -319,6 +319,36 @@ test('GET /api/leads/sidebar-counts reflects leads per pipeline status', async (
   assert.equal(r.body.counts.dispatchPending, 0);
 });
 
+test('l3ToL2Pending badge for an L2 user counts only handoffs assigned to them', async () => {
+  await createLead({ status: 'L3_TO_L2_HANDOFF' }); // unassigned (or another L2's)
+  await createLead({ status: 'L3_TO_L2_HANDOFF', l3ToL2AssignedToId: userId('NOC_L2_USER') });
+
+  // The L2 queue lists only their assigned handoffs — the badge must match it.
+  const l2 = await request('GET', '/api/leads/sidebar-counts', { token: tokens.nocL2 });
+  assert.equal(l2.status, 200);
+  assert.equal(l2.body.counts.l3ToL2Pending, 1, 'L2 badge matches the assigned-only queue');
+
+  const admin = await request('GET', '/api/leads/sidebar-counts', { token: tokens.admin });
+  assert.equal(admin.body.counts.l3ToL2Pending, 2, 'admins still see the stage total');
+});
+
+test('poApprovalPending counts POs awaiting admin approval (admins only)', async () => {
+  await prisma.storePurchaseOrder.create({
+    data: { poNumber: `PO-T-${Date.now()}-1`, createdById: userId('STORE_USER'), status: 'PENDING_ADMIN' },
+  });
+  await prisma.storePurchaseOrder.create({
+    data: { poNumber: `PO-T-${Date.now()}-2`, createdById: userId('STORE_USER'), status: 'APPROVED' },
+  });
+
+  const admin = await request('GET', '/api/leads/sidebar-counts', { token: tokens.admin });
+  assert.equal(admin.status, 200);
+  assert.equal(admin.body.counts.poApprovalPending, 1);
+
+  // The PO Approvals tab is admin-only — others skip the extra count query.
+  const sales = await request('GET', '/api/leads/sidebar-counts', { token: tokens.sales });
+  assert.equal(sales.body.counts.poApprovalPending, undefined);
+});
+
 // The stage-11 docs-verification work-view was removed (2026-07-03) — docs are
 // verified once, at stage 5b below. The per-doc verification endpoint remains.
 
@@ -439,6 +469,27 @@ test('feasibility queue rows hide pricing, bank details, portal creds, NOC confi
   assert.equal(l.requirementDetails.userCount, 900, 'sizing stays visible');
   assert.equal(l.latitude, 18.52, 'location stays visible');
   assert.equal(l.contactPersonName, 'Meera K', 'contact stays visible');
+});
+
+test('POST /:id/feasibility stores an optional estimated delivery date', async () => {
+  const lead = await createLead({ status: 'FEASIBILITY_PENDING' });
+  const r = await request('POST', `/api/leads/${lead.id}/feasibility`, {
+    token: tokens.feasibility,
+    body: {
+      feasible: true,
+      vendors: [{ kind: 'OWN', fiberMeters: 500 }],
+      estimatedDeliveryAt: '2026-08-01',
+    },
+  });
+  assert.equal(r.status, 200);
+  const stored = await prisma.lead.findUnique({ where: { id: lead.id }, select: { estimatedDeliveryAt: true } });
+  assert.ok(stored.estimatedDeliveryAt, 'date persisted');
+
+  const bad = await request('POST', `/api/leads/${lead.id}/feasibility`, {
+    token: tokens.feasibility,
+    body: { feasible: true, vendors: [{ kind: 'OWN', fiberMeters: 500 }], estimatedDeliveryAt: 'not-a-date' },
+  });
+  assert.equal(bad.status, 400);
 });
 
 test('store queue rows are minimal — no contact, pricing, or requirement details', async () => {
