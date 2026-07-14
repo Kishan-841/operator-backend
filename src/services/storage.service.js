@@ -97,6 +97,28 @@ export const sendDownload = async (res, { storageKey, fileName, mimeType }) => {
   }
 };
 
+/**
+ * Read a stored file's bytes (for server-side use, e.g. merging documents
+ * into a generated agreement). Returns a Buffer, or null when the key
+ * doesn't exist — callers turn that into a friendly error.
+ */
+export const readFileBuffer = async (storageKey) => {
+  try {
+    if (useR2) {
+      const obj = await s3().send(new GetObjectCommand({ Bucket: R2.bucket, Key: storageKey }));
+      const chunks = [];
+      for await (const chunk of obj.Body) chunks.push(chunk);
+      return Buffer.concat(chunks);
+    }
+    return await fs.promises.readFile(path.join(UPLOAD_ROOT, storageKey));
+  } catch (err) {
+    if (err?.code === 'ENOENT' || err?.name === 'NoSuchKey' || err?.$metadata?.httpStatusCode === 404) {
+      return null;
+    }
+    throw err;
+  }
+};
+
 export const removeFile = async (storageKey) => {
   try {
     if (useR2) {

@@ -1,7 +1,13 @@
 import prisma from '../config/db.js';
 import * as svc from '../services/agreement.service.js';
+import { readFileBuffer } from '../services/storage.service.js';
 
-/** POST /api/leads/:id/agreement/generate (SOFTWARE / SALES) { orgName, orgAddress, orgOwnerName } */
+/**
+ * POST /api/leads/:id/agreement/generate (SOFTWARE / SALES)
+ * { orgName, orgAddress?, orgOwnerName?, agreementDate?, attachDocumentIds? }
+ * attachDocumentIds — LeadDocument ids (of THIS lead) whose files are appended
+ * to the end of the generated PDF, before any manually uploaded attachments.
+ */
 export const generateAgreement = async (req, res) => {
   try {
     const lead = await prisma.lead.findUnique({
@@ -23,9 +29,37 @@ export const generateAgreement = async (req, res) => {
       }
     }
 
+    // Already-uploaded lead documents selected in the modal. Multipart repeats
+    // the field per id (string when only one); JSON sends an array.
+    const rawIds = req.body?.attachDocumentIds;
+    const ids = [...new Set(Array.isArray(rawIds) ? rawIds : rawIds ? [rawIds] : [])].filter(
+      (v) => typeof v === 'string' && v.trim(),
+    );
+    const docAttachments = [];
+    if (ids.length) {
+      // Scoped to THIS lead — an id belonging to another lead is a 400, never a leak.
+      const docs = await prisma.leadDocument.findMany({
+        where: { id: { in: ids }, leadId: req.params.id },
+        select: { id: true, fileName: true, storageKey: true, mimeType: true },
+      });
+      if (docs.length !== ids.length) {
+        return res.status(400).json({ message: 'One or more selected documents no longer exist on this lead.' });
+      }
+      // Keep the user's selection order (docs come back unordered).
+      const byId = new Map(docs.map((d) => [d.id, d]));
+      for (const id of ids) {
+        const doc = byId.get(id);
+        const fileBuffer = await readFileBuffer(doc.storageKey);
+        if (!fileBuffer) {
+          return res.status(400).json({ message: `The stored file for "${doc.fileName}" is missing.` });
+        }
+        docAttachments.push({ buffer: fileBuffer, mimetype: doc.mimeType, originalname: doc.fileName });
+      }
+    }
+
     const { buffer, ext, contentType } = await svc.generateAgreement(
       { orgName, orgAddress: req.body?.orgAddress, orgOwnerName: req.body?.orgOwnerName, agreementDate },
-      req.files || [],
+      [...docAttachments, ...(req.files || [])],
     );
 
     // Soft-stamp when the agreement was generated (drives the queue's step

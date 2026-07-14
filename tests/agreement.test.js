@@ -6,7 +6,7 @@ import { fileURLToPath } from 'node:url';
 import PizZip from 'pizzip';
 import app from '../src/app.js';
 import { formatAgreementDate } from '../src/services/agreement.service.js';
-import { prisma, seedUsers, cleanup, createLead, TEST_PASSWORD } from './helpers.mjs';
+import { prisma, seedUsers, cleanup, createLead, addDocument, TEST_PASSWORD } from './helpers.mjs';
 
 let server;
 let base;
@@ -75,6 +75,31 @@ test('agreement.docx template contains the {Agreement Date} placeholder', () => 
 });
 
 // ── Boundary validation ───────────────────────────────────────────────────────
+// ── Attaching already-uploaded lead documents ─────────────────────────────────
+test('generate rejects attachDocumentIds belonging to another lead → 400', async () => {
+  const lead = await createLead({ status: 'AGREEMENT_PENDING' });
+  const otherLead = await createLead({ status: 'AGREEMENT_PENDING' });
+  const foreignDoc = await addDocument(otherLead.id, 'PAN');
+  const r = await request('POST', `/api/leads/${lead.id}/agreement/generate`, {
+    token: tokens.software,
+    body: { orgName: 'Acme Telecom', attachDocumentIds: [foreignDoc.id] },
+  });
+  assert.equal(r.status, 400);
+  assert.match(r.body.message, /no longer exist/);
+});
+
+test('generate names the document when its stored file is missing → 400', async () => {
+  const lead = await createLead({ status: 'AGREEMENT_PENDING' });
+  // helpers.addDocument records a storageKey that has no file on disk.
+  const doc = await addDocument(lead.id, 'GST');
+  const r = await request('POST', `/api/leads/${lead.id}/agreement/generate`, {
+    token: tokens.software,
+    body: { orgName: 'Acme Telecom', attachDocumentIds: [doc.id] },
+  });
+  assert.equal(r.status, 400);
+  assert.match(r.body.message, /GST\.pdf.*missing|missing/);
+});
+
 test('POST /:id/agreement/generate rejects an invalid agreementDate → 400', async () => {
   const lead = await createLead({ status: 'AGREEMENT_PENDING' });
   const r = await request('POST', `/api/leads/${lead.id}/agreement/generate`, {
