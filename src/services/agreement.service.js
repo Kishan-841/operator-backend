@@ -10,14 +10,25 @@ import { PDFDocument } from 'pdf-lib';
 const here = path.dirname(fileURLToPath(import.meta.url));
 const TEMPLATE_PATH = path.join(here, '..', 'templates', 'agreement.docx');
 
+// "executed on this the {Agreement Date} at Pune" — legal ordinal style.
+const ordinal = (n) => {
+  if (n % 100 >= 11 && n % 100 <= 13) return `${n}th`;
+  return `${n}${{ 1: 'st', 2: 'nd', 3: 'rd' }[n % 10] || 'th'}`;
+};
+export const formatAgreementDate = (date) => {
+  const month = date.toLocaleString('en-GB', { month: 'long' });
+  return `${ordinal(date.getDate())} day of ${month}, ${date.getFullYear()}`;
+};
+
 // The placeholders inside the .docx template ({Org Name} etc.) → form fields.
-const fill = ({ orgName, orgAddress, orgOwnerName }) => {
+const fill = ({ orgName, orgAddress, orgOwnerName, agreementDate }) => {
   const zip = new PizZip(fs.readFileSync(TEMPLATE_PATH));
   const doc = new Docxtemplater(zip, { paragraphLoop: true, linebreaks: true });
   doc.render({
     'Org Name': orgName || '',
     'Org Address': orgAddress || '',
     'Org Owner Name': orgOwnerName || '',
+    'Agreement Date': formatAgreementDate(agreementDate || new Date()),
   });
   return doc.getZip().generate({ type: 'nodebuffer' });
 };

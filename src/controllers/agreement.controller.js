@@ -13,8 +13,18 @@ export const generateAgreement = async (req, res) => {
     const orgName = String(req.body?.orgName || '').trim();
     if (!orgName) return res.status(400).json({ message: 'Organization name is required.' });
 
+    // Optional execution date ('YYYY-MM-DD' from the modal) — defaults to today.
+    const rawDate = req.body?.agreementDate;
+    let agreementDate = new Date();
+    if (rawDate !== undefined && rawDate !== null && rawDate !== '') {
+      agreementDate = new Date(rawDate);
+      if (Number.isNaN(agreementDate.getTime())) {
+        return res.status(400).json({ message: 'agreementDate must be a valid date.' });
+      }
+    }
+
     const { buffer, ext, contentType } = await svc.generateAgreement(
-      { orgName, orgAddress: req.body?.orgAddress, orgOwnerName: req.body?.orgOwnerName },
+      { orgName, orgAddress: req.body?.orgAddress, orgOwnerName: req.body?.orgOwnerName, agreementDate },
       req.files || [],
     );
 
