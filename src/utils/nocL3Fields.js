@@ -2,7 +2,7 @@
 // keys per aggregator type. Keep the two files in sync when adding fields.
 export const NOC_L3_FIELD_KEYS = {
   MIKROTIK: ['mikrotikIdentity', 'mikrotikIp', 'mikrotikGateway', 'snatPool', 'dynamicPool', 'vlan'],
-  BNG: ['mikrotikIp', 'mikrotikIdentity', 'loopbackIp', 'vsi'],
+  BNG: ['mikrotikIp', 'mikrotikIdentity', 'loopbackIp', 'vsi', 'vlan'],
   BGP: ['bgpLocalIp', 'bgpPeerIp', 'peerAsn', 'advertisedSubnet', 'vlan'],
 };
 

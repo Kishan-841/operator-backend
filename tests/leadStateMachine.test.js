@@ -689,7 +689,7 @@ test('a lead walks the full pipeline NEW → COMPLETED', async () => {
   await sm.completeNocL3({
     leadId: lead.id,
     actor: actor('NOC_L3_USER'),
-    ipAllocation: { BNG: [{ mikrotikIp: '10.0.0.2', mikrotikIdentity: 'MK-1', loopbackIp: '10.255.0.1', vsi: 'VSI-201' }] },
+    ipAllocation: { BNG: [{ mikrotikIp: '10.0.0.2', mikrotikIdentity: 'MK-1', loopbackIp: '10.255.0.1', vsi: 'VSI-201', vlan: '100' }] },
   });
   assert.equal(await status(lead.id), 'L3_TO_L2_HANDOFF');
 
@@ -715,7 +715,7 @@ test('completeNocL3 requires a complete config per selected aggregator', async (
     aggregatorTypes: ['BNG', 'MIKROTIK'],
     aggregatorType: 'BNG',
   });
-  const bng = { mikrotikIp: '10.0.0.2', mikrotikIdentity: 'MK-1', loopbackIp: '10.255.0.1', vsi: 'VSI-201' };
+  const bng = { mikrotikIp: '10.0.0.2', mikrotikIdentity: 'MK-1', loopbackIp: '10.255.0.1', vsi: 'VSI-201', vlan: '100' };
   // MIKROTIK config missing entirely → 400
   await rejectsWithStatus(
     () => sm.completeNocL3({ leadId: lead.id, actor: actor('NOC_L3_USER'), ipAllocation: { BNG: [bng] } }),
@@ -742,7 +742,7 @@ test('completeNocL3 legacy lead (single aggregatorType, no array) needs just tha
     requirementDetails: {},
     aggregatorType: 'BNG',
   });
-  const bng = { mikrotikIp: '10.0.0.2', mikrotikIdentity: 'MK-1', loopbackIp: '10.255.0.1', vsi: 'VSI-201' };
+  const bng = { mikrotikIp: '10.0.0.2', mikrotikIdentity: 'MK-1', loopbackIp: '10.255.0.1', vsi: 'VSI-201', vlan: '100' };
   const updated = await sm.completeNocL3({ leadId: lead.id, actor: actor('NOC_L3_USER'), ipAllocation: { BNG: [bng] } });
   assert.equal(updated.status, 'L3_TO_L2_HANDOFF');
 });
@@ -750,6 +750,31 @@ test('completeNocL3 legacy lead (single aggregatorType, no array) needs just tha
 const MK_UNIT = (n) => ({
   mikrotikIdentity: `MK-${n}`, mikrotikIp: `10.0.0.${n}`, mikrotikGateway: '10.0.0.1',
   snatPool: '100.64.0.0/22', dynamicPool: '10.10.0.0/16', vlan: '100',
+});
+
+test('completeNocL3 BNG requires VLAN and VSI', async () => {
+  const lead = await createLead({
+    status: 'NOC_L3_PENDING', category: 'PIN_RATE', requirementDetails: {},
+    aggregatorSelections: [{ type: 'BNG', quantity: 1 }],
+    aggregatorTypes: ['BNG'], aggregatorType: 'BNG',
+  });
+  const base = { mikrotikIp: '10.0.0.2', mikrotikIdentity: 'MK-1', loopbackIp: '10.255.0.1' };
+  // missing vlan → 400
+  await rejectsWithStatus(
+    () => sm.completeNocL3({ leadId: lead.id, actor: actor('NOC_L3_USER'), ipAllocation: { BNG: [{ ...base, vsi: 'VSI-201' }] } }),
+    400,
+  );
+  // missing vsi → 400
+  await rejectsWithStatus(
+    () => sm.completeNocL3({ leadId: lead.id, actor: actor('NOC_L3_USER'), ipAllocation: { BNG: [{ ...base, vlan: '100' }] } }),
+    400,
+  );
+  const updated = await sm.completeNocL3({
+    leadId: lead.id, actor: actor('NOC_L3_USER'),
+    ipAllocation: { BNG: [{ ...base, vsi: 'VSI-201', vlan: '100' }] },
+  });
+  assert.equal(updated.status, 'L3_TO_L2_HANDOFF');
+  assert.equal(updated.ipAllocation.BNG[0].vlan, '100');
 });
 
 test('completeNocL3 requires exactly quantity complete units per selection', async () => {
@@ -787,7 +812,7 @@ test('completeNocL3 v2-era lead (aggregatorTypes, no selections) needs one unit 
     status: 'NOC_L3_PENDING', category: 'PIN_RATE', requirementDetails: {},
     aggregatorTypes: ['BNG'], aggregatorType: 'BNG',
   });
-  const bng = { mikrotikIp: '10.0.0.2', mikrotikIdentity: 'MK-1', loopbackIp: '10.255.0.1', vsi: 'VSI-201' };
+  const bng = { mikrotikIp: '10.0.0.2', mikrotikIdentity: 'MK-1', loopbackIp: '10.255.0.1', vsi: 'VSI-201', vlan: '100' };
   const updated = await sm.completeNocL3({ leadId: lead.id, actor: actor('NOC_L3_USER'), ipAllocation: { BNG: [bng] } });
   assert.equal(updated.status, 'L3_TO_L2_HANDOFF');
 });
