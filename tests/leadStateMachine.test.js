@@ -680,7 +680,7 @@ test('a lead walks the full pipeline NEW → COMPLETED', async () => {
   await sm.completeNocL2({ leadId: lead.id, actor: actor('NOC_L2_USER'), configNotes: 'vlan set' });
   assert.equal(await status(lead.id), 'AGGREGATOR_CONFIRM_PENDING');
 
-  await sm.confirmAggregator({ leadId: lead.id, actor: actor('SALES_USER'), aggregatorTypes: ['BNG'], remark: 'ok' });
+  await sm.confirmAggregator({ leadId: lead.id, actor: actor('SALES_USER'), selections: [{ type: 'BNG', quantity: 1 }], remark: 'ok' });
   assert.equal(await status(lead.id), 'SOFTWARE_PENDING');
 
   await sm.completeSoftware({ leadId: lead.id, actor: actor('SOFTWARE_USER'), managedBy: 'SOFTWARE', portalUsername: 'acme' });
@@ -689,7 +689,7 @@ test('a lead walks the full pipeline NEW → COMPLETED', async () => {
   await sm.completeNocL3({
     leadId: lead.id,
     actor: actor('NOC_L3_USER'),
-    ipAllocation: { BNG: { mikrotikIp: '10.0.0.2', mikrotikIdentity: 'MK-1', loopbackIp: '10.255.0.1', vsi: 'VSI-201' } },
+    ipAllocation: { BNG: [{ mikrotikIp: '10.0.0.2', mikrotikIdentity: 'MK-1', loopbackIp: '10.255.0.1', vsi: 'VSI-201' }] },
   });
   assert.equal(await status(lead.id), 'L3_TO_L2_HANDOFF');
 
@@ -718,21 +718,21 @@ test('completeNocL3 requires a complete config per selected aggregator', async (
   const bng = { mikrotikIp: '10.0.0.2', mikrotikIdentity: 'MK-1', loopbackIp: '10.255.0.1', vsi: 'VSI-201' };
   // MIKROTIK config missing entirely → 400
   await rejectsWithStatus(
-    () => sm.completeNocL3({ leadId: lead.id, actor: actor('NOC_L3_USER'), ipAllocation: { BNG: bng } }),
+    () => sm.completeNocL3({ leadId: lead.id, actor: actor('NOC_L3_USER'), ipAllocation: { BNG: [bng] } }),
     400,
   );
   // MIKROTIK config incomplete (one required key blank) → 400
   const mkPartial = { mikrotikIdentity: 'MK-2', mikrotikIp: '10.0.0.3', mikrotikGateway: '10.0.0.1', snatPool: '100.64.0.0/22', dynamicPool: '' };
   await rejectsWithStatus(
-    () => sm.completeNocL3({ leadId: lead.id, actor: actor('NOC_L3_USER'), ipAllocation: { BNG: bng, MIKROTIK: mkPartial } }),
+    () => sm.completeNocL3({ leadId: lead.id, actor: actor('NOC_L3_USER'), ipAllocation: { BNG: [bng], MIKROTIK: [mkPartial] } }),
     400,
   );
   // Both complete → advances and stores the nested shape
   const mk = { mikrotikIdentity: 'MK-2', mikrotikIp: '10.0.0.3', mikrotikGateway: '10.0.0.1', snatPool: '100.64.0.0/22', dynamicPool: '10.10.0.0/16', vlan: '100' };
-  const updated = await sm.completeNocL3({ leadId: lead.id, actor: actor('NOC_L3_USER'), ipAllocation: { BNG: bng, MIKROTIK: mk } });
+  const updated = await sm.completeNocL3({ leadId: lead.id, actor: actor('NOC_L3_USER'), ipAllocation: { BNG: [bng], MIKROTIK: [mk] } });
   assert.equal(updated.status, 'L3_TO_L2_HANDOFF');
   assert.deepEqual(Object.keys(updated.ipAllocation).sort(), ['BNG', 'MIKROTIK']);
-  assert.equal(updated.ipAllocation.MIKROTIK.vlan, '100');
+  assert.equal(updated.ipAllocation.MIKROTIK[0].vlan, '100');
 });
 
 test('completeNocL3 legacy lead (single aggregatorType, no array) needs just that config', async () => {
@@ -743,7 +743,52 @@ test('completeNocL3 legacy lead (single aggregatorType, no array) needs just tha
     aggregatorType: 'BNG',
   });
   const bng = { mikrotikIp: '10.0.0.2', mikrotikIdentity: 'MK-1', loopbackIp: '10.255.0.1', vsi: 'VSI-201' };
-  const updated = await sm.completeNocL3({ leadId: lead.id, actor: actor('NOC_L3_USER'), ipAllocation: { BNG: bng } });
+  const updated = await sm.completeNocL3({ leadId: lead.id, actor: actor('NOC_L3_USER'), ipAllocation: { BNG: [bng] } });
+  assert.equal(updated.status, 'L3_TO_L2_HANDOFF');
+});
+
+const MK_UNIT = (n) => ({
+  mikrotikIdentity: `MK-${n}`, mikrotikIp: `10.0.0.${n}`, mikrotikGateway: '10.0.0.1',
+  snatPool: '100.64.0.0/22', dynamicPool: '10.10.0.0/16', vlan: '100',
+});
+
+test('completeNocL3 requires exactly quantity complete units per selection', async () => {
+  const lead = await createLead({
+    status: 'NOC_L3_PENDING', category: 'PIN_RATE', requirementDetails: {},
+    aggregatorSelections: [{ type: 'MIKROTIK', quantity: 2 }, { type: 'OLT', quantity: 1 }],
+    aggregatorTypes: ['MIKROTIK', 'OLT'], aggregatorType: 'MIKROTIK',
+  });
+  const olt = { identity: 'OLT-1', ip: '10.1.0.2', gateway: '10.1.0.1', vlan: '200' };
+  // only one MIKROTIK unit for quantity 2 → 400
+  await rejectsWithStatus(
+    () => sm.completeNocL3({ leadId: lead.id, actor: actor('NOC_L3_USER'), ipAllocation: { MIKROTIK: [MK_UNIT(2)], OLT: [olt] } }),
+    400,
+  );
+  // custom type missing a generic required key → 400
+  await rejectsWithStatus(
+    () => sm.completeNocL3({
+      leadId: lead.id, actor: actor('NOC_L3_USER'),
+      ipAllocation: { MIKROTIK: [MK_UNIT(2), MK_UNIT(3)], OLT: [{ identity: 'OLT-1', ip: '10.1.0.2', gateway: '10.1.0.1' }] },
+    }),
+    400,
+  );
+  // all complete → advances, arrays stored
+  const updated = await sm.completeNocL3({
+    leadId: lead.id, actor: actor('NOC_L3_USER'),
+    ipAllocation: { MIKROTIK: [MK_UNIT(2), MK_UNIT(3)], OLT: [olt] },
+  });
+  assert.equal(updated.status, 'L3_TO_L2_HANDOFF');
+  assert.equal(updated.ipAllocation.MIKROTIK.length, 2);
+  assert.equal(updated.ipAllocation.OLT[0].vlan, '200');
+});
+
+test('completeNocL3 v2-era lead (aggregatorTypes, no selections) needs one unit per type', async () => {
+  const lead = await createLead({
+    status: 'NOC_L3_PENDING', category: 'PIN_RATE', requirementDetails: {},
+    aggregatorTypes: ['BNG'], aggregatorType: 'BNG',
+  });
+  const bng = { mikrotikIp: '10.0.0.2', mikrotikIdentity: 'MK-1', loopbackIp: '10.255.0.1', vsi: 'VSI-201' };
+  const updated = await sm.completeNocL3({ leadId: lead.id, actor: actor('NOC_L3_USER'), ipAllocation: { BNG: [bng] } });
   assert.equal(updated.status, 'L3_TO_L2_HANDOFF');
 });
 
@@ -777,7 +822,7 @@ test('confirmAggregator accepts BGP for an ISP lead', async () => {
   const updated = await sm.confirmAggregator({
     leadId: lead.id,
     actor: actor('SALES_USER'),
-    aggregatorTypes: ['BGP'],
+    selections: [{ type: 'BGP', quantity: 1 }],
     remark: 'BGP session with client AS',
   });
   assert.equal(updated.aggregatorType, 'BGP');
@@ -791,15 +836,7 @@ test('confirmAggregator rejects BGP for a non-ISP lead → 400', async () => {
     requirementDetails: { estimatedUserCount: 100, ratePerUser: 40 },
   });
   await rejectsWithStatus(
-    () => sm.confirmAggregator({ leadId: lead.id, actor: actor('SALES_USER'), aggregatorTypes: ['BGP'], remark: 'x' }),
-    400,
-  );
-});
-
-test('confirmAggregator rejects an unknown aggregator type → 400', async () => {
-  const lead = await createLead({ status: 'AGGREGATOR_CONFIRM_PENDING' });
-  await rejectsWithStatus(
-    () => sm.confirmAggregator({ leadId: lead.id, actor: actor('SALES_USER'), aggregatorTypes: ['CISCO'], remark: 'x' }),
+    () => sm.confirmAggregator({ leadId: lead.id, actor: actor('SALES_USER'), selections: [{ type: 'BGP', quantity: 1 }], remark: 'x' }),
     400,
   );
 });
@@ -809,7 +846,7 @@ test('confirmAggregator stores multiple types and mirrors the first into aggrega
   const updated = await sm.confirmAggregator({
     leadId: lead.id,
     actor: actor('SALES_USER'),
-    aggregatorTypes: ['BNG', 'MIKROTIK'],
+    selections: [{ type: 'BNG', quantity: 1 }, { type: 'MIKROTIK', quantity: 1 }],
     remark: 'both needed',
   });
   assert.equal(updated.status, 'SOFTWARE_PENDING');
@@ -820,23 +857,77 @@ test('confirmAggregator stores multiple types and mirrors the first into aggrega
 test('confirmAggregator rejects BGP for a non-ISP lead and empty selections', async () => {
   const lead = await createLead({ status: 'AGGREGATOR_CONFIRM_PENDING', category: 'PIN_RATE', requirementDetails: {} });
   await rejectsWithStatus(
-    () => sm.confirmAggregator({ leadId: lead.id, actor: actor('SALES_USER'), aggregatorTypes: ['BNG', 'BGP'] }),
+    () => sm.confirmAggregator({ leadId: lead.id, actor: actor('SALES_USER'), selections: [{ type: 'BNG', quantity: 1 }, { type: 'BGP', quantity: 1 }] }),
     400,
   );
   await rejectsWithStatus(
-    () => sm.confirmAggregator({ leadId: lead.id, actor: actor('SALES_USER'), aggregatorTypes: [] }),
+    () => sm.confirmAggregator({ leadId: lead.id, actor: actor('SALES_USER'), selections: [] }),
     400,
   );
 });
 
-test('confirmAggregator dedupes repeated selections', async () => {
-  const lead = await createLead({ status: 'AGGREGATOR_CONFIRM_PENDING' }); // ISP default
+test('validateAggregator dedupes repeated selections (first quantity wins)', async () => {
+  const { validateAggregator } = await import('../src/validation/stage5.js');
+  const r = validateAggregator({ selections: [{ type: 'bgp', quantity: 2 }, { type: 'BGP', quantity: 5 }, { type: 'BNG' }] });
+  assert.equal(r.ok, true);
+  assert.deepEqual(r.data.selections, [{ type: 'BGP', quantity: 2 }, { type: 'BNG', quantity: 1 }]);
+});
+
+test('validateAggregator normalizes names and rejects bad names/quantities', async () => {
+  const { validateAggregator } = await import('../src/validation/stage5.js');
+  assert.deepEqual(
+    validateAggregator({ selections: [{ type: ' olt ', quantity: 1 }] }).data.selections,
+    [{ type: 'OLT', quantity: 1 }],
+  );
+  assert.equal(validateAggregator({ selections: [{ type: 'x', quantity: 1 }] }).ok, false); // too short
+  assert.equal(validateAggregator({ selections: [{ type: 'OLT!', quantity: 1 }] }).ok, false); // bad charset
+  assert.equal(validateAggregator({ selections: [{ type: 'OLT', quantity: 0 }] }).ok, false);
+  assert.equal(validateAggregator({ selections: [{ type: 'OLT', quantity: 11 }] }).ok, false);
+  assert.equal(validateAggregator({ selections: [{ type: 'OLT', quantity: 2.5 }] }).ok, false);
+});
+
+test('validateAggregator caps the selection list at 10 (append-only master protection)', async () => {
+  const { validateAggregator } = await import('../src/validation/stage5.js');
+  const eleven = Array.from({ length: 11 }, (_, i) => ({ type: `TYPE-${i}`, quantity: 1 }));
+  assert.equal(validateAggregator({ selections: eleven }).ok, false);
+  assert.equal(validateAggregator({ selections: eleven.slice(0, 10) }).ok, true);
+});
+
+test('confirmAggregator on a lead past stage 10 → 409 and registers no master rows', async () => {
+  const lead = await createLead({ status: 'SOFTWARE_PENDING', category: 'PIN_RATE', requirementDetails: {} });
+  await rejectsWithStatus(
+    () => sm.confirmAggregator({ leadId: lead.id, actor: actor('SALES_USER'), selections: [{ type: 'ZZZ-STALE', quantity: 1 }] }),
+    409,
+  );
+  assert.equal(await prisma.aggregatorType.count({ where: { name: 'ZZZ-STALE' } }), 0, 'stale confirm must not write the shared master');
+});
+
+test('confirmAggregator stores selections with quantity and registers custom types once', async () => {
+  const lead = await createLead({ status: 'AGGREGATOR_CONFIRM_PENDING', category: 'PIN_RATE', requirementDetails: {} });
   const updated = await sm.confirmAggregator({
     leadId: lead.id,
     actor: actor('SALES_USER'),
-    aggregatorTypes: ['BGP', 'BGP', 'BNG'],
+    selections: [{ type: 'OLT', quantity: 1 }, { type: 'MIKROTIK', quantity: 2 }],
   });
-  assert.deepEqual(updated.aggregatorTypes, ['BGP', 'BNG']);
+  assert.equal(updated.status, 'SOFTWARE_PENDING');
+  assert.deepEqual(updated.aggregatorSelections, [{ type: 'OLT', quantity: 1 }, { type: 'MIKROTIK', quantity: 2 }]);
+  assert.deepEqual(updated.aggregatorTypes, ['OLT', 'MIKROTIK']);
+  assert.equal(updated.aggregatorType, 'OLT');
+  // custom name registered exactly once; built-ins never registered
+  const rows = await prisma.aggregatorType.findMany();
+  assert.deepEqual(rows.map((r) => r.name), ['OLT']);
+
+  const lead2 = await createLead({ status: 'AGGREGATOR_CONFIRM_PENDING', category: 'PIN_RATE', requirementDetails: {} });
+  await sm.confirmAggregator({ leadId: lead2.id, actor: actor('SALES_USER'), selections: [{ type: 'OLT', quantity: 3 }] });
+  assert.equal(await prisma.aggregatorType.count(), 1, 'no duplicate master row');
+});
+
+test('confirmAggregator still rejects BGP for non-ISP; custom names allowed for all', async () => {
+  const lead = await createLead({ status: 'AGGREGATOR_CONFIRM_PENDING', category: 'PIN_RATE', requirementDetails: {} });
+  await rejectsWithStatus(
+    () => sm.confirmAggregator({ leadId: lead.id, actor: actor('SALES_USER'), selections: [{ type: 'BGP', quantity: 1 }] }),
+    400,
+  );
 });
 
 // ── ISP shortcut: no NOC L3, no L3→L2 handoff ────────────────────────────────

@@ -20,6 +20,7 @@ import {
   clientHandoverQueue,
   agreementQueue,
   sidebarCounts,
+  aggregatorOptions,
 } from '../controllers/lead.queues.controller.js';
 import {
   submitFeasibility,
@@ -62,6 +63,7 @@ router.use(auth);
 // --- Reads (literal paths before '/:id') ---
 router.get('/', requireRole('SALES_USER'), getLeads);
 router.get('/sidebar-counts', sidebarCounts); // any authenticated staff
+router.get('/aggregator-options', aggregatorOptions); // any authenticated staff
 router.get('/feasibility/queue', requireRole('FEASIBILITY_USER'), feasibilityQueue);
 router.get('/pricing/queue', requireRole('SALES_USER'), pricingQueue);
 router.get('/approvals/queue', requireRole('SUPER_ADMIN', 'ADMIN'), approvalsQueue);

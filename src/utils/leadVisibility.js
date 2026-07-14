@@ -44,7 +44,7 @@ const GROUPS = [
   { fields: ['installationCompletedAt'], roles: [S, D, L2, L3] },
   { fields: ['ipDetails'], roles: [S, L2, L3, SW] },
   { fields: ['nocL2ConfigNotes', 'nocL2Config', 'nocL2AssignedToId', 'nocL2AssignedTo'], roles: [L2, L3] },
-  { fields: ['aggregatorType', 'aggregatorTypes', 'aggregatorConfirmRemark'], roles: [S, L2, L3, SW] },
+  { fields: ['aggregatorType', 'aggregatorTypes', 'aggregatorSelections', 'aggregatorConfirmRemark'], roles: [S, L2, L3, SW] },
   {
     fields: ['portalManagedBy', 'portalUrl', 'portalUsername', 'portalPassword', 'ipPoolNoticeAt', 'softwareAssignedToId', 'softwareAssignedTo'],
     roles: [S, SW],

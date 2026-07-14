@@ -118,6 +118,7 @@ export async function cleanup() {
   await prisma.storePurchaseOrder.deleteMany({});
   await prisma.storeProduct.deleteMany({});
   await prisma.notification.deleteMany({});
+  await prisma.aggregatorType.deleteMany({});
   await prisma.statusChangeLog.deleteMany({}); // all log rows (whole DB is test data)
   await prisma.lead.deleteMany({}); // cascades documents / materialReq / dispatch / deliveryRequest
   await prisma.vendor.deleteMany({});

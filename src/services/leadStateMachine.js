@@ -7,7 +7,7 @@ import { assertLeadAccess } from '../utils/leadAccess.js';
 import { AGREEMENT_DOC_TYPE } from '../utils/documentTypes.js';
 import { missingRequiredDocs } from '../utils/docRequirements.js';
 import { generateDeliveryRequestNumber } from './leadNumber.service.js';
-import { NOC_L3_FIELD_KEYS } from '../utils/nocL3Fields.js';
+import { KNOWN_AGGREGATORS, requiredKeysFor } from '../utils/nocL3Fields.js';
 
 // Append to a delivery request's audit trail. Soft-fail — never break the flow.
 const logDeliveryRequest = async ({ deliveryRequestId, action, actor, details = null }) => {
@@ -805,22 +805,30 @@ export const completeNocL2 = ({ leadId, actor, configNotes, config }) =>
     noteStage: 'NOC_L2',
   });
 
-// Stage 10: sales confirms one or more aggregators (remark optional) → software.
-export const confirmAggregator = async ({ leadId, actor, aggregatorTypes, remark }) => {
-  // BGP is an ISP-only aggregator option; BNG/Mikrotik apply to every category.
+// Stage 10: sales confirms one or more aggregators (each with a quantity) →
+// software. Custom types (anything beyond the built-ins) are registered in the
+// shared AggregatorType master on first use.
+export const confirmAggregator = async ({ leadId, actor, selections, remark }) => {
   const { category } = await loadLead(leadId);
-  const allowed = ['BNG', 'MIKROTIK', ...(category === 'ISP' ? ['BGP'] : [])];
-  const types = [...new Set(Array.isArray(aggregatorTypes) ? aggregatorTypes : [])];
-  if (!types.length || types.some((t) => !allowed.includes(t))) {
-    throw httpError(400, `Pick valid aggregator types (${allowed.join(' / ')}).`);
+  const list = Array.isArray(selections) ? selections : [];
+  if (!list.length) throw httpError(400, 'Select at least one aggregator type.');
+  // BGP is an ISP-only aggregator option; everything else applies to every category.
+  if (category !== 'ISP' && list.some((s) => s.type === 'BGP')) {
+    throw httpError(400, 'BGP is available only for ISP leads.');
   }
-  return advance({
+  const types = list.map((s) => s.type);
+  const updated = await advance({
     leadId,
     actor,
     from: 'AGGREGATOR_CONFIRM_PENDING',
     to: 'SOFTWARE_PENDING',
-    // aggregatorType mirrors the first selection so legacy readers keep working.
-    data: { aggregatorTypes: types, aggregatorType: types[0], aggregatorConfirmRemark: remark },
+    // aggregatorTypes/aggregatorType mirror the selections for legacy readers.
+    data: {
+      aggregatorSelections: list,
+      aggregatorTypes: types,
+      aggregatorType: types[0],
+      aggregatorConfirmRemark: remark,
+    },
     notifyRole: 'SOFTWARE_USER',
     notifyTitle: 'ready for software setup',
     outgoing: ['SALES_USER'],
@@ -828,6 +836,22 @@ export const confirmAggregator = async ({ leadId, actor, aggregatorTypes, remark
     noteStage: 'AGGREGATOR',
     ownerOnly: true,
   });
+  // Register custom names only AFTER the transition landed — a stale 409'd
+  // confirm must not write to the shared master list. Soft-fail (CLAUDE.md §9):
+  // a master-write error must never roll back the confirm itself.
+  for (const s of list) {
+    if (KNOWN_AGGREGATORS.includes(s.type)) continue;
+    try {
+      await prisma.aggregatorType.upsert({
+        where: { name: s.type },
+        update: {},
+        create: { name: s.type, createdById: actor.id },
+      });
+    } catch (e) {
+      console.warn('[aggregatorType.upsert] non-fatal:', e?.message);
+    }
+  }
+  return updated;
 };
 
 // Stage 11: software portal/migration/IP-pool notice → NOC L3.
@@ -876,23 +900,26 @@ export const completeNocL3 = async ({ leadId, actor, ipAllocation }) => {
   if (lead.status !== 'NOC_L3_PENDING') {
     throw httpError(409, 'This lead is no longer awaiting NOC L3 — someone already completed it.');
   }
-  const selected = lead.aggregatorTypes?.length
-    ? lead.aggregatorTypes
-    : lead.aggregatorType
-      ? [lead.aggregatorType]
-      : ['MIKROTIK'];
+  // Selections → types-array (qty 1 each) → single legacy column → Mikrotik.
+  const selections = Array.isArray(lead.aggregatorSelections) && lead.aggregatorSelections.length
+    ? lead.aggregatorSelections
+    : (lead.aggregatorTypes?.length ? lead.aggregatorTypes : [lead.aggregatorType || 'MIKROTIK'])
+        .map((type) => ({ type, quantity: 1 }));
   const alloc = ipAllocation && typeof ipAllocation === 'object' ? ipAllocation : {};
-  for (const type of selected) {
-    const required = NOC_L3_FIELD_KEYS[type] || [];
-    const section = alloc[type];
-    const missing = !section || required.some((k) => !String(section[k] ?? '').trim());
-    if (missing) {
-      throw httpError(400, `Complete the ${type} configuration before saving.`);
+  const stored = {};
+  for (const { type, quantity } of selections) {
+    const required = requiredKeysFor(type);
+    const units = Array.isArray(alloc[type]) ? alloc[type] : [];
+    if (units.length !== quantity) {
+      throw httpError(400, `Provide ${quantity} ${type} configuration${quantity === 1 ? '' : 's'}.`);
     }
+    units.forEach((u, i) => {
+      const missing = !u || typeof u !== 'object' || required.some((k) => !String(u[k] ?? '').trim());
+      if (missing) throw httpError(400, `Complete the ${type} #${i + 1} configuration before saving.`);
+    });
+    // Store only the selected types' units — extras were never validated.
+    stored[type] = units;
   }
-  // Store only the selected types' sections — extra known-type sections in the
-  // payload were never validated for completeness, so don't persist them.
-  const stored = Object.fromEntries(selected.map((t) => [t, alloc[t]]));
   return advance({
     leadId,
     actor,

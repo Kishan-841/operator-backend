@@ -688,3 +688,15 @@ test('POST /:id/l3-to-l2 allows the NOC L3 user to mark the handoff completed', 
   assert.equal(r.status, 200);
   assert.equal(r.body.data.status, 'CLIENT_HANDOVER_PENDING');
 });
+
+// ── Aggregator options (stage-10 picker) ─────────────────────────────────────
+test('GET /api/leads/aggregator-options returns builtins + custom master rows', async () => {
+  await prisma.aggregatorType.create({ data: { name: 'OLT', createdById: userId('SALES_USER') } });
+  const r = await request('GET', '/api/leads/aggregator-options', { token: tokens.sales });
+  assert.equal(r.status, 200);
+  assert.deepEqual(r.body.builtins, ['BNG', 'MIKROTIK', 'BGP']);
+  assert.deepEqual(r.body.custom, ['OLT']);
+
+  const unauth = await request('GET', '/api/leads/aggregator-options');
+  assert.equal(unauth.status, 401);
+});

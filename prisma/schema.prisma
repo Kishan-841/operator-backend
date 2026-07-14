@@ -147,6 +147,7 @@ model User {
   deliveryRequests       DeliveryRequest[]     @relation("DeliveryRequestCreatedBy")
   deliveryReqApproved    DeliveryRequest[]     @relation("DeliveryRequestApprovedBy")
   deliveryReqRejected    DeliveryRequest[]     @relation("DeliveryRequestRejectedBy")
+  aggregatorTypesCreated AggregatorType[]      @relation("AggregatorTypeCreatedBy")
   deliveryReqAssigned    DeliveryRequest[]     @relation("DeliveryRequestAssignedToStore")
   deliveryRequestLogs    DeliveryRequestLog[]  @relation("DeliveryRequestLogPerformedBy")
 
@@ -261,6 +262,7 @@ model Lead {
 
   aggregatorType          String? // 'BNG' | 'MIKROTIK' (extend as needed)
   aggregatorTypes         String[] @default([]) // multi-select at stage 10; aggregatorType mirrors [0] for legacy readers
+  aggregatorSelections    Json? // [{ type, quantity }] — aggregatorTypes/aggregatorType mirror it
   aggregatorConfirmRemark String? // §3 stage-10 handoff remark
 
   softwareAssignedToId String?
@@ -439,6 +441,16 @@ model Counter {
   key       String   @id // e.g. 'LEAD'
   value     Int      @default(0)
   updatedAt DateTime @updatedAt
+}
+
+// Custom aggregator types added inline at stage 10 (built-ins BNG/MIKROTIK/BGP
+// never live here). Implicitly created on first use; names stored normalized.
+model AggregatorType {
+  id          String   @id @default(uuid())
+  name        String   @unique
+  createdById String
+  createdBy   User     @relation("AggregatorTypeCreatedBy", fields: [createdById], references: [id])
+  createdAt   DateTime @default(now())
 }
 
 // Per-user notifications emitted on stage transitions (CLAUDE.md §3).

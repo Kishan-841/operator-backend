@@ -334,7 +334,7 @@ export const completeSoftware = async (req, res) => {
   }
 };
 
-/** POST /api/leads/:id/noc-l3 (NOC_L3) { <AGGREGATOR>: { <fieldKey>: value } } — one section per type selected at stage 10 */
+/** POST /api/leads/:id/noc-l3 (NOC_L3) { <AGGREGATOR>: [ { <fieldKey>: value }, ... ] } — one entry per UNIT selected at stage 10 */
 export const completeNocL3 = async (req, res) => {
   try {
     const result = validateIpAllocation(req.body);

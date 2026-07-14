@@ -138,3 +138,17 @@ export const sidebarCounts = async (req, res) => {
     return res.status(500).json({ message: 'Failed to fetch counts.' });
   }
 };
+
+// Picker display order — independent of NOC_L3_FIELD_KEYS declaration order.
+const BUILTIN_AGGREGATOR_ORDER = ['BNG', 'MIKROTIK', 'BGP'];
+
+/** GET /api/leads/aggregator-options — stage-10 picker options (any authenticated staff). */
+export const aggregatorOptions = async (req, res) => {
+  try {
+    const custom = await prisma.aggregatorType.findMany({ orderBy: { name: 'asc' }, select: { name: true } });
+    return res.json({ builtins: BUILTIN_AGGREGATOR_ORDER, custom: custom.map((c) => c.name) });
+  } catch (error) {
+    console.error('[lead.aggregatorOptions]', error);
+    return res.status(500).json({ message: 'Failed to fetch aggregator options.' });
+  }
+};
