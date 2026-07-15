@@ -4,9 +4,12 @@ import prisma from '../config/db.js';
 import { logEvent } from '../services/statusChangeLog.service.js';
 import { actorFromReq } from '../utils/requestContext.js';
 
+// Sessions expire after 1 hour (override with JWT_EXPIRES_IN). An expired
+// token gets a 401 from the auth middleware; the frontend interceptor then
+// drops the session and returns the user to /login.
 const signToken = (user) =>
   jwt.sign({ userId: user.id, role: user.role }, process.env.JWT_SECRET, {
-    expiresIn: process.env.JWT_EXPIRES_IN || '7d',
+    expiresIn: process.env.JWT_EXPIRES_IN || '1h',
   });
 
 const publicUser = (user) => ({
