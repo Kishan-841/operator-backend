@@ -199,6 +199,58 @@ test('POST /api/leads rejects a missing mobile number → 400', async () => {
   assert.equal(r.status, 400);
 });
 
+test('POST /api/leads blocks duplicates by email or mobile; rejected leads may be re-created', async () => {
+  const first = await request('POST', '/api/leads', { token: tokens.sales, body: validLead() });
+  assert.equal(first.status, 201);
+
+  // Same email, different mobile → 400 pointing at email.
+  const dupEmail = await request('POST', '/api/leads', {
+    token: tokens.sales,
+    body: { ...validLead(), phone: '9876500000', whatsappNumber: '9876500000' },
+  });
+  assert.equal(dupEmail.status, 400);
+  assert.ok(dupEmail.body.errors.some((e) => e.path === 'email'), 'names the email field');
+
+  // Same mobile, different email → 400 pointing at phone.
+  const dupPhone = await request('POST', '/api/leads', {
+    token: tokens.sales,
+    body: { ...validLead(), email: 'other@acme.test' },
+  });
+  assert.equal(dupPhone.status, 400);
+  assert.ok(dupPhone.body.errors.some((e) => e.path === 'phone'), 'names the phone field');
+
+  // Case-insensitive email match still blocks.
+  const dupCase = await request('POST', '/api/leads', {
+    token: tokens.sales,
+    body: { ...validLead(), email: 'OPS@ACME.TEST', phone: '9876500002', whatsappNumber: '9876500002' },
+  });
+  assert.equal(dupCase.status, 400);
+
+  // A REJECTED lead doesn't block re-creation.
+  await prisma.lead.updateMany({ where: { email: 'ops@acme.test' }, data: { status: 'REJECTED' } });
+  const again = await request('POST', '/api/leads', { token: tokens.sales, body: validLead() });
+  assert.equal(again.status, 201);
+});
+
+test("PUT /api/leads/:id blocks updating into another lead's email/mobile (self excluded)", async () => {
+  const a = await request('POST', '/api/leads', { token: tokens.sales, body: validLead() });
+  assert.equal(a.status, 201);
+  const bBody = { ...validLead(), email: 'b@acme.test', phone: '9876500001', whatsappNumber: '9876500001' };
+  const b = await request('POST', '/api/leads', { token: tokens.sales, body: bBody });
+  assert.equal(b.status, 201);
+
+  // b takes a's email → 400
+  const clash = await request('PUT', `/api/leads/${b.body.data.id}`, {
+    token: tokens.sales,
+    body: { ...bBody, email: 'ops@acme.test' },
+  });
+  assert.equal(clash.status, 400);
+
+  // b keeping its own contact details is not a self-duplicate.
+  const ok = await request('PUT', `/api/leads/${b.body.data.id}`, { token: tokens.sales, body: bBody });
+  assert.equal(ok.status, 200);
+});
+
 test('GET /api/leads (sales) returns a paginated envelope', async () => {
   await request('POST', '/api/leads', { token: tokens.sales, body: validLead() });
   const r = await request('GET', '/api/leads', { token: tokens.sales });

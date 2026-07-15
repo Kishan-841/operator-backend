@@ -27,6 +27,35 @@ const creatorSelect = {
 };
 
 /** POST /api/leads — create a NEW lead with an atomically-generated number. */
+// A lead is a duplicate when its email or mobile number matches an existing
+// lead. REJECTED leads don't block — a franchise turned down earlier may
+// legitimately be re-created later.
+const findDuplicateLead = async ({ email, phone }, excludeId) => {
+  const or = [];
+  if (email) or.push({ email: { equals: email, mode: 'insensitive' } });
+  if (phone) or.push({ phone });
+  if (!or.length) return null;
+  return prisma.lead.findFirst({
+    where: {
+      status: { not: 'REJECTED' },
+      OR: or,
+      ...(excludeId ? { NOT: { id: excludeId } } : {}),
+    },
+    select: { leadNumber: true, email: true, phone: true },
+  });
+};
+
+const duplicateErrors = (dupe, { email, phone }) => {
+  const errors = [];
+  if (email && dupe.email?.toLowerCase() === email.toLowerCase()) {
+    errors.push({ path: 'email', message: `A lead with this email already exists (${dupe.leadNumber}).` });
+  }
+  if (phone && dupe.phone === phone) {
+    errors.push({ path: 'phone', message: `A lead with this mobile number already exists (${dupe.leadNumber}).` });
+  }
+  return errors.length ? errors : [{ path: 'email', message: `Duplicate of lead ${dupe.leadNumber}.` }];
+};
+
 export const createLead = async (req, res) => {
   try {
     const result = validateLeadPayload(req.body);
@@ -34,6 +63,14 @@ export const createLead = async (req, res) => {
       return res.status(400).json({ message: 'Validation failed.', errors: result.errors });
     }
     const { category, requirementDetails, ...contact } = result.data;
+
+    const dupe = await findDuplicateLead(contact);
+    if (dupe) {
+      return res.status(400).json({
+        message: `This lead already exists (${dupe.leadNumber}).`,
+        errors: duplicateErrors(dupe, contact),
+      });
+    }
 
     const lead = await prisma.$transaction(async (tx) => {
       const leadNumber = await generateLeadNumber(tx);
@@ -181,6 +218,15 @@ export const updateLead = async (req, res) => {
       return res.status(400).json({ message: 'Validation failed.', errors: result.errors });
     }
     const { category, requirementDetails, ...contact } = result.data;
+
+    // Editing must not clone another lead's contact identity (self excluded).
+    const dupe = await findDuplicateLead(contact, id);
+    if (dupe) {
+      return res.status(400).json({
+        message: `Another lead already uses these contact details (${dupe.leadNumber}).`,
+        errors: duplicateErrors(dupe, contact),
+      });
+    }
 
     const lead = await prisma.lead.update({
       where: { id },
