@@ -10,18 +10,17 @@ export const REQUIRED_DOCS = {
   OPERATOR: [
     'Aadhaar Card (Authorized Signatory)',
     'PAN Card (Authorized Signatory)',
-    'GST Certificate',
     'Shop Act',
-    'Authorization Letter',
+    'Udyam Aadhar',
   ],
   ISP: [
-    'Copy of ISP License',
-    'GST Certificate',
-    "Company's PAN Card",
-    'Authorization Letter',
     'Aadhaar Card (Authorized Signatory)',
     'PAN Card (Authorized Signatory)',
-    'IP Allocation Details',
+    "Company's PAN Card",
+    'Copy of ISP License',
+    'Shop Act / Udyam Aadhar',
+    'Purchase Order',
+    'GST Certificate',
   ],
 };
 
