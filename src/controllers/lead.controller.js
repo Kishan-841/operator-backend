@@ -82,6 +82,16 @@ export const createLead = async (req, res) => {
     const { category, requirementDetails, ...contact } = result.data;
 
     const dupe = await findDuplicateLead(contact);
+    // Admins aren't silently exempt: they get the duplicate error too, but may
+    // resubmit with allowDuplicate (the form's "Create anyway") — no approval
+    // request needed since they ARE the approver.
+    if (dupe && isAdmin(req.user) && req.body?.allowDuplicate !== true) {
+      return res.status(400).json({
+        message: `This lead already exists (${dupe.leadNumber}).`,
+        errors: duplicateErrors(dupe, contact),
+        duplicate: { leadNumber: dupe.leadNumber, approvalStatus: 'ADMIN_OVERRIDE', rejectedReason: null },
+      });
+    }
     // An admin-APPROVED duplicate request (by this user, for exactly this
     // email+mobile, not yet spent) unlocks ONE duplicate creation.
     let exception = null;

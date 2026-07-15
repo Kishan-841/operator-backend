@@ -320,6 +320,29 @@ test('duplicate approval: rejection keeps creation blocked and reports REJECTED'
   assert.equal(blocked.body.duplicate?.approvalStatus, 'REJECTED');
 });
 
+test('admin duplicate create: warned first, allowed with allowDuplicate; sales cannot use the flag', async () => {
+  await request('POST', '/api/leads', { token: tokens.sales, body: validLead() });
+
+  // Admin without the flag → 400 flagged as admin-overridable.
+  const warned = await request('POST', '/api/leads', { token: tokens.admin, body: validLead() });
+  assert.equal(warned.status, 400);
+  assert.equal(warned.body.duplicate?.approvalStatus, 'ADMIN_OVERRIDE');
+
+  // Admin with the flag → created.
+  const forced = await request('POST', '/api/leads', {
+    token: tokens.admin,
+    body: { ...validLead(), allowDuplicate: true },
+  });
+  assert.equal(forced.status, 201);
+
+  // Sales sending the flag → still blocked (the flag is admin-only).
+  const salesForced = await request('POST', '/api/leads', {
+    token: tokens.sales,
+    body: { ...validLead(), allowDuplicate: true },
+  });
+  assert.equal(salesForced.status, 400);
+});
+
 test("duplicate approval: another user's approval doesn't unlock creation", async () => {
   await request('POST', '/api/leads', { token: tokens.sales, body: validLead() });
   // Admin requests + approves for themselves; the sales user still can't use it.
