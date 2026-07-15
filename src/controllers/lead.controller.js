@@ -24,8 +24,27 @@ const VALID_STATUSES = Object.values(LeadStatus);
 
 const creatorSelect = {
   createdBy: { select: { id: true, name: true, email: true } },
+  assignedSales: { select: { id: true, name: true } },
   popLocation: { select: { id: true, name: true, latitude: true, longitude: true } },
   distributor: { select: { id: true, name: true, isDefault: true } },
+};
+
+// Owner of the lead: admins may hand it to an active SALES_USER; everyone else
+// (and admins who don't pick) owns what they create. Throws 400 on a bad target.
+const resolveOwnerId = async (req, fallbackId) => {
+  const rawId = req.body?.assignedSalesId;
+  if (!isAdmin(req.user) || typeof rawId !== 'string' || !rawId.trim()) return fallbackId;
+  const target = await prisma.user.findUnique({
+    where: { id: rawId.trim() },
+    select: { id: true, role: true, isActive: true },
+  });
+  // Valid owners: an active sales user, or the acting admin themselves ("Me").
+  if (!target || !target.isActive || (target.role !== 'SALES_USER' && target.id !== req.user.id)) {
+    const err = new Error('Pick an active sales user as the lead owner.');
+    err.status = 400;
+    throw err;
+  }
+  return target.id;
 };
 
 // Resolve the lead's distributor: explicit pick must exist; no pick → GAZON.
@@ -132,6 +151,7 @@ export const createLead = async (req, res) => {
     }
 
     const distributorId = await resolveDistributorId(req.body?.distributorId);
+    const ownerId = await resolveOwnerId(req, req.user.id);
 
     const lead = await prisma.$transaction(async (tx) => {
       // Spend the approval atomically with the creation — the conditional
@@ -157,7 +177,7 @@ export const createLead = async (req, res) => {
           distributorId,
           status: 'NEW',
           createdById: req.user.id,
-          assignedSalesId: req.user.id,
+          assignedSalesId: ownerId,
         },
         include: creatorSelect,
       });
@@ -312,10 +332,12 @@ export const updateLead = async (req, res) => {
     }
 
     const distributorId = await resolveDistributorId(req.body?.distributorId ?? existing.distributorId);
+    // Admins may reassign the owner while editing; others keep the current owner.
+    const ownerId = await resolveOwnerId(req, existing.assignedSalesId);
 
     const lead = await prisma.lead.update({
       where: { id },
-      data: { category, requirementDetails, ...contact, distributorId },
+      data: { category, requirementDetails, ...contact, distributorId, assignedSalesId: ownerId },
       include: creatorSelect,
     });
 

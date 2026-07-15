@@ -320,6 +320,42 @@ test('duplicate approval: rejection keeps creation blocked and reports REJECTED'
   assert.equal(blocked.body.duplicate?.approvalStatus, 'REJECTED');
 });
 
+test('admin can pick the lead owner; sales cannot assign others; invalid target → 400', async () => {
+  // Admin assigns the lead to the sales user.
+  const assigned = await request('POST', '/api/leads', {
+    token: tokens.admin,
+    body: { ...validLead(), assignedSalesId: userId('SALES_USER') },
+  });
+  assert.equal(assigned.status, 201);
+  assert.equal(assigned.body.data.assignedSalesId, userId('SALES_USER'));
+  // ...and the sales user sees it in their owner-scoped list.
+  const mine = await request('GET', '/api/leads', { token: tokens.sales });
+  assert.ok(mine.body.items.some((l) => l.id === assigned.body.data.id), 'owner sees the lead');
+
+  // Admin without the field owns it themselves.
+  const own = await request('POST', '/api/leads', {
+    token: tokens.admin,
+    body: { ...validLead(), email: 'own@acme.test', phone: '9876500003', whatsappNumber: '9876500003' },
+  });
+  assert.equal(own.status, 201);
+  assert.equal(own.body.data.assignedSalesId, userId('ADMIN'));
+
+  // A non-sales target → 400.
+  const badTarget = await request('POST', '/api/leads', {
+    token: tokens.admin,
+    body: { ...validLead(), email: 'bad@acme.test', phone: '9876500004', whatsappNumber: '9876500004', assignedSalesId: userId('STORE_USER') },
+  });
+  assert.equal(badTarget.status, 400);
+
+  // Sales users can't assign someone else — the field is ignored.
+  const salesTry = await request('POST', '/api/leads', {
+    token: tokens.sales,
+    body: { ...validLead(), email: 's@acme.test', phone: '9876500005', whatsappNumber: '9876500005', assignedSalesId: userId('ADMIN') },
+  });
+  assert.equal(salesTry.status, 201);
+  assert.equal(salesTry.body.data.assignedSalesId, userId('SALES_USER'));
+});
+
 test('admin duplicate create: warned first, allowed with allowDuplicate; sales cannot use the flag', async () => {
   await request('POST', '/api/leads', { token: tokens.sales, body: validLead() });
 
