@@ -95,6 +95,41 @@ test('distributor CRUD is admin-only; sales can only read options', async () => 
   assert.equal(create.status, 403);
 });
 
+test('full operator-shaped payload creates a distributor with a stored profile', async () => {
+  const body = validLead({
+    organizationName: 'West Region Head',
+    email: 'west@dist.test',
+    phone: '9444444444',
+    whatsappNumber: '9444444444',
+    category: 'PIN_RATE',
+    requirementDetails: { estimatedUserCount: 100, ratePerUser: 50 },
+  });
+  const r = await request('POST', '/api/distributors', { token: tokens.admin, body });
+  assert.equal(r.status, 201);
+  assert.equal(r.body.data.name, 'West Region Head');
+  assert.equal(r.body.data.phone, '9444444444');
+  assert.equal(r.body.data.email, 'west@dist.test');
+  assert.equal(r.body.data.profile.category, 'PIN_RATE');
+  assert.equal(r.body.data.profile.requirementDetails.ratePerUser, 50);
+
+  // Invalid full payload (bad email) → 400 with field errors, like leads.
+  const bad = await request('POST', '/api/distributors', {
+    token: tokens.admin,
+    body: validLead({ organizationName: 'X', email: 'not-an-email', phone: '9444444445', whatsappNumber: '9444444445' }),
+  });
+  assert.equal(bad.status, 400);
+  assert.ok(Array.isArray(bad.body.errors));
+
+  // Editing with a full payload updates profile + extracted columns.
+  const upd = await request('PUT', `/api/distributors/${r.body.data.id}`, {
+    token: tokens.admin,
+    body: { ...body, organizationName: 'West Head Renamed' },
+  });
+  assert.equal(upd.status, 200);
+  assert.equal(upd.body.data.name, 'West Head Renamed');
+  assert.equal(upd.body.data.profile.organizationName, 'West Head Renamed');
+});
+
 test('duplicate distributor mobile/email → 400 naming the existing one', async () => {
   const first = await request('POST', '/api/distributors', {
     token: tokens.admin,

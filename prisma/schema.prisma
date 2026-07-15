@@ -466,9 +466,12 @@ model AggregatorType {
 // pre-existing rows where distributorId is null).
 model Distributor {
   id        String   @id @default(uuid())
-  name      String
+  name      String // = profile.organizationName for full-profile distributors
   phone     String?
   email     String?
+  // Full operator-shaped payload (same fields as a lead, validated by the same
+  // validator) — distributors don't enter the pipeline, so it lives here.
+  profile   Json?
   isDefault Boolean  @default(false)
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt

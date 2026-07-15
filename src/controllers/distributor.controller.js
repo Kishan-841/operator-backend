@@ -1,5 +1,6 @@
 import prisma from '../config/db.js';
 import { parsePagination, paginatedResponse } from '../utils/pagination.js';
+import { validateLeadPayload } from '../validation/leadCategories.js';
 import { logEvent } from '../services/statusChangeLog.service.js';
 import { actorFromReq } from '../utils/requestContext.js';
 
@@ -21,11 +22,40 @@ export const ensureDefaultDistributor = async () => {
 const leadScopeFor = (dist) =>
   dist.isDefault ? { OR: [{ distributorId: dist.id }, { distributorId: null }] } : { distributorId: dist.id };
 
-const normalize = (body = {}) => ({
-  name: String(body.name || '').trim(),
-  phone: String(body.phone || '').trim() || null,
-  email: String(body.email || '').trim().toLowerCase() || null,
-});
+/**
+ * Two accepted body shapes:
+ *  - FULL operator profile (same fields as a lead, `organizationName` present)
+ *    → validated by the lead validator, stored in `profile`, with
+ *    name/phone/email extracted for the list + duplicate rules.
+ *  - Legacy minimal `{ name, phone?, email? }` (used for GAZON's contact edit).
+ * Returns { ok, data?, errors?/message? }.
+ */
+const normalize = (body = {}) => {
+  if (body.organizationName !== undefined) {
+    const result = validateLeadPayload(body);
+    if (!result.ok) return { ok: false, errors: result.errors };
+    const { distributorId: _ignored, ...profile } = result.data;
+    return {
+      ok: true,
+      data: {
+        name: profile.organizationName,
+        phone: profile.phone || null,
+        email: String(profile.email || '').trim().toLowerCase() || null,
+        profile,
+      },
+    };
+  }
+  const name = String(body.name || '').trim();
+  if (!name) return { ok: false, message: 'Distributor name is required.' };
+  return {
+    ok: true,
+    data: {
+      name,
+      phone: String(body.phone || '').trim() || null,
+      email: String(body.email || '').trim().toLowerCase() || null,
+    },
+  };
+};
 
 /** Another distributor already using this mobile/email (self excluded). */
 const findClash = async ({ phone, email }, excludeId) => {
@@ -76,8 +106,11 @@ export const distributorOptions = async (req, res) => {
 /** POST /api/distributors (ADMIN) { name, phone?, email? } */
 export const createDistributor = async (req, res) => {
   try {
-    const data = normalize(req.body);
-    if (!data.name) return res.status(400).json({ message: 'Distributor name is required.' });
+    const result = normalize(req.body);
+    if (!result.ok) {
+      return res.status(400).json({ message: result.message || 'Validation failed.', errors: result.errors });
+    }
+    const data = result.data;
     const clash = await findClash(data);
     if (clash) {
       return res.status(400).json({ message: `Distributor "${clash.name}" already uses these contact details.` });
@@ -102,8 +135,11 @@ export const updateDistributor = async (req, res) => {
   try {
     const dist = await prisma.distributor.findUnique({ where: { id: req.params.id } });
     if (!dist) return res.status(404).json({ message: 'Distributor not found.' });
-    const data = normalize(req.body);
-    if (!data.name) return res.status(400).json({ message: 'Distributor name is required.' });
+    const result = normalize(req.body);
+    if (!result.ok) {
+      return res.status(400).json({ message: result.message || 'Validation failed.', errors: result.errors });
+    }
+    const data = result.data;
     if (dist.isDefault && data.name !== dist.name) {
       return res.status(400).json({ message: 'GAZON is the default distributor — its name cannot be changed.' });
     }
