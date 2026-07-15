@@ -202,6 +202,10 @@ model Lead {
   assignedSalesId String?
   assignedSales   User?   @relation("LeadAssignedSales", fields: [assignedSalesId], references: [id])
 
+  // Head of this franchise — null means the GAZON default distributor.
+  distributorId String?
+  distributor   Distributor? @relation("LeadDistributor", fields: [distributorId], references: [id])
+
   feasibilityAssignedToId String?
   feasibilityAssignedTo   User?     @relation("LeadFeasibilityAssignee", fields: [feasibilityAssignedToId], references: [id])
   feasibilityNotes        String?
@@ -309,6 +313,7 @@ model Lead {
   @@index([l3ToL2AssignedToId, status])
   @@index([softwareAssignedToId, status])
   @@index([createdById])
+  @@index([distributorId])
   @@index([createdAt])
 }
 
@@ -456,6 +461,22 @@ model AggregatorType {
 }
 
 // Per-user notifications emitted on stage transitions (CLAUDE.md §3).
+// A distributor heads one or more franchises (leads). GAZON is the seeded
+// default — leads without an explicit distributor belong to it (including
+// pre-existing rows where distributorId is null).
+model Distributor {
+  id        String   @id @default(uuid())
+  name      String
+  phone     String?
+  email     String?
+  isDefault Boolean  @default(false)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  leads     Lead[]   @relation("LeadDistributor")
+
+  @@index([name])
+}
+
 // Sales may ask admin to allow creating a DUPLICATE lead (same email/mobile,
 // e.g. the same franchise at a second location). One approval covers exactly
 // one creation of exactly the requested contact identity, by the requester.

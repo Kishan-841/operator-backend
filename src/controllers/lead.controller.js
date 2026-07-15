@@ -4,6 +4,7 @@ import { parsePagination, paginatedResponse } from '../utils/pagination.js';
 import { validateLeadPayload, LEAD_CATEGORIES } from '../validation/leadCategories.js';
 import { validateIpDetails } from '../validation/ipDetails.js';
 import { generateLeadNumber } from '../services/leadNumber.service.js';
+import { ensureDefaultDistributor } from './distributor.controller.js';
 import { logEvent, diffFields } from '../services/statusChangeLog.service.js';
 import { addLeadNote } from '../services/leadNote.service.js';
 import { stripLeadForRole, stripLeadsForRole } from '../utils/leadVisibility.js';
@@ -24,6 +25,22 @@ const VALID_STATUSES = Object.values(LeadStatus);
 const creatorSelect = {
   createdBy: { select: { id: true, name: true, email: true } },
   popLocation: { select: { id: true, name: true, latitude: true, longitude: true } },
+  distributor: { select: { id: true, name: true, isDefault: true } },
+};
+
+// Resolve the lead's distributor: explicit pick must exist; no pick → GAZON.
+const resolveDistributorId = async (rawId) => {
+  const id = typeof rawId === 'string' && rawId.trim() ? rawId.trim() : null;
+  if (id) {
+    const found = await prisma.distributor.findUnique({ where: { id }, select: { id: true } });
+    if (!found) {
+      const err = new Error('The selected distributor no longer exists.');
+      err.status = 400;
+      throw err;
+    }
+    return id;
+  }
+  return (await ensureDefaultDistributor()).id;
 };
 
 /** POST /api/leads — create a NEW lead with an atomically-generated number. */
@@ -104,6 +121,8 @@ export const createLead = async (req, res) => {
       }
     }
 
+    const distributorId = await resolveDistributorId(req.body?.distributorId);
+
     const lead = await prisma.$transaction(async (tx) => {
       // Spend the approval atomically with the creation — the conditional
       // updateMany means two racing creates can't both use it.
@@ -125,6 +144,7 @@ export const createLead = async (req, res) => {
           category,
           requirementDetails,
           ...contact,
+          distributorId,
           status: 'NEW',
           createdById: req.user.id,
           assignedSalesId: req.user.id,
@@ -281,9 +301,11 @@ export const updateLead = async (req, res) => {
       });
     }
 
+    const distributorId = await resolveDistributorId(req.body?.distributorId ?? existing.distributorId);
+
     const lead = await prisma.lead.update({
       where: { id },
-      data: { category, requirementDetails, ...contact },
+      data: { category, requirementDetails, ...contact, distributorId },
       include: creatorSelect,
     });
 
@@ -301,6 +323,7 @@ export const updateLead = async (req, res) => {
     }
     return res.json({ message: 'Lead updated.', data: lead });
   } catch (error) {
+    if (error?.status === 400) return res.status(400).json({ message: error.message });
     console.error('[lead.updateLead]', error);
     return res.status(500).json({ message: 'Failed to update lead.' });
   }

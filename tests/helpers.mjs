@@ -122,6 +122,7 @@ export async function cleanup() {
   await prisma.duplicateLeadApproval.deleteMany({});
   await prisma.statusChangeLog.deleteMany({}); // all log rows (whole DB is test data)
   await prisma.lead.deleteMany({}); // cascades documents / materialReq / dispatch / deliveryRequest
+  await prisma.distributor.deleteMany({}); // after leads (FK)
   await prisma.vendor.deleteMany({});
 }
 
