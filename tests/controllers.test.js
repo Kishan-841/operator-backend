@@ -251,6 +251,88 @@ test("PUT /api/leads/:id blocks updating into another lead's email/mobile (self 
   assert.equal(ok.status, 200);
 });
 
+// ── Duplicate-lead approval flow ─────────────────────────────────────────────
+test('duplicate approval: request → admin approves → one duplicate creation allowed', async () => {
+  const first = await request('POST', '/api/leads', { token: tokens.sales, body: validLead() });
+  assert.equal(first.status, 201);
+
+  // The duplicate 400 tells the form there is no request yet.
+  const blocked = await request('POST', '/api/leads', { token: tokens.sales, body: validLead() });
+  assert.equal(blocked.status, 400);
+  assert.equal(blocked.body.duplicate?.approvalStatus, 'NONE');
+
+  // No duplicate exists for a random identity → request refused.
+  const pointless = await request('POST', '/api/leads/duplicate-approvals', {
+    token: tokens.sales,
+    body: { email: 'nobody@nowhere.test', phone: '9111111111' },
+  });
+  assert.equal(pointless.status, 400);
+
+  // Real request → 201; a second identical request while pending → 409.
+  const reqBody = { email: 'ops@acme.test', phone: '9876543210', organizationName: 'Acme Telecom', reason: 'second outlet' };
+  const created = await request('POST', '/api/leads/duplicate-approvals', { token: tokens.sales, body: reqBody });
+  assert.equal(created.status, 201);
+  const dupReq = await request('POST', '/api/leads/duplicate-approvals', { token: tokens.sales, body: reqBody });
+  assert.equal(dupReq.status, 409);
+
+  // The duplicate 400 now reports PENDING; creation still blocked.
+  const stillBlocked = await request('POST', '/api/leads', { token: tokens.sales, body: validLead() });
+  assert.equal(stillBlocked.status, 400);
+  assert.equal(stillBlocked.body.duplicate?.approvalStatus, 'PENDING');
+
+  // Admin lists and approves (sales cannot).
+  const forbidden = await request('GET', '/api/leads/duplicate-approvals?status=PENDING', { token: tokens.sales });
+  assert.equal(forbidden.status, 403);
+  const list = await request('GET', '/api/leads/duplicate-approvals?status=PENDING', { token: tokens.admin });
+  assert.equal(list.status, 200);
+  assert.equal(list.body.items.length, 1);
+  const approvalId = list.body.items[0].id;
+  const approve = await request('POST', `/api/leads/duplicate-approvals/${approvalId}/approve`, { token: tokens.admin });
+  assert.equal(approve.status, 200);
+
+  // The requester can now create the duplicate — once.
+  const allowed = await request('POST', '/api/leads', { token: tokens.sales, body: validLead() });
+  assert.equal(allowed.status, 201);
+  const spent = await request('POST', '/api/leads', { token: tokens.sales, body: validLead() });
+  assert.equal(spent.status, 400, 'approval is consumed by one creation');
+});
+
+test('duplicate approval: rejection keeps creation blocked and reports REJECTED', async () => {
+  await request('POST', '/api/leads', { token: tokens.sales, body: validLead() });
+  const created = await request('POST', '/api/leads/duplicate-approvals', {
+    token: tokens.sales,
+    body: { email: 'ops@acme.test', phone: '9876543210' },
+  });
+  assert.equal(created.status, 201);
+  const rejectNoReason = await request('POST', `/api/leads/duplicate-approvals/${created.body.data.id}/reject`, {
+    token: tokens.admin,
+    body: {},
+  });
+  assert.equal(rejectNoReason.status, 400);
+  const reject = await request('POST', `/api/leads/duplicate-approvals/${created.body.data.id}/reject`, {
+    token: tokens.admin,
+    body: { reason: 'same location, no need' },
+  });
+  assert.equal(reject.status, 200);
+
+  const blocked = await request('POST', '/api/leads', { token: tokens.sales, body: validLead() });
+  assert.equal(blocked.status, 400);
+  assert.equal(blocked.body.duplicate?.approvalStatus, 'REJECTED');
+});
+
+test("duplicate approval: another user's approval doesn't unlock creation", async () => {
+  await request('POST', '/api/leads', { token: tokens.sales, body: validLead() });
+  // Admin requests + approves for themselves; the sales user still can't use it.
+  const created = await request('POST', '/api/leads/duplicate-approvals', {
+    token: tokens.admin,
+    body: { email: 'ops@acme.test', phone: '9876543210' },
+  });
+  assert.equal(created.status, 201);
+  await request('POST', `/api/leads/duplicate-approvals/${created.body.data.id}/approve`, { token: tokens.admin });
+  const blocked = await request('POST', '/api/leads', { token: tokens.sales, body: validLead() });
+  assert.equal(blocked.status, 400, 'approval is bound to its requester');
+});
+
 test('GET /api/leads (sales) returns a paginated envelope', async () => {
   await request('POST', '/api/leads', { token: tokens.sales, body: validLead() });
   const r = await request('GET', '/api/leads', { token: tokens.sales });

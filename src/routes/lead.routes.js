@@ -1,6 +1,12 @@
 import { Router } from 'express';
 import { createLead, getLeads, getLead, updateLead, updateIpDetails } from '../controllers/lead.controller.js';
 import { getLeadNotes } from '../controllers/note.controller.js';
+import {
+  requestDuplicateApproval,
+  listDuplicateApprovals,
+  approveDuplicateApproval,
+  rejectDuplicateApproval,
+} from '../controllers/duplicateApproval.controller.js';
 import { generateAgreement } from '../controllers/agreement.controller.js';
 import {
   feasibilityQueue,
@@ -64,6 +70,12 @@ router.use(auth);
 router.get('/', requireRole('SALES_USER'), getLeads);
 router.get('/sidebar-counts', sidebarCounts); // any authenticated staff
 router.get('/aggregator-options', aggregatorOptions); // any authenticated staff
+
+// Duplicate-lead approvals (must stay above the /:id routes).
+router.post('/duplicate-approvals', requireRole('SALES_USER'), requestDuplicateApproval);
+router.get('/duplicate-approvals', requireRole('SUPER_ADMIN', 'ADMIN'), listDuplicateApprovals);
+router.post('/duplicate-approvals/:approvalId/approve', requireRole('SUPER_ADMIN', 'ADMIN'), approveDuplicateApproval);
+router.post('/duplicate-approvals/:approvalId/reject', requireRole('SUPER_ADMIN', 'ADMIN'), rejectDuplicateApproval);
 router.get('/feasibility/queue', requireRole('FEASIBILITY_USER'), feasibilityQueue);
 router.get('/pricing/queue', requireRole('SALES_USER'), pricingQueue);
 router.get('/approvals/queue', requireRole('SUPER_ADMIN', 'ADMIN'), approvalsQueue);

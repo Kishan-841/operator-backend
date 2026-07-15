@@ -130,6 +130,10 @@ export const sidebarCounts = async (req, res) => {
       counts.poApprovalPending = await prisma.storePurchaseOrder.count({
         where: { status: 'PENDING_ADMIN' },
       });
+      // Duplicate-lead requests share the Approvals tab with pricing approvals.
+      counts.pendingApproval += await prisma.duplicateLeadApproval.count({
+        where: { status: 'PENDING' },
+      });
     }
 
     return res.json({ counts });

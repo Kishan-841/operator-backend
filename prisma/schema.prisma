@@ -148,6 +148,8 @@ model User {
   deliveryReqApproved    DeliveryRequest[]     @relation("DeliveryRequestApprovedBy")
   deliveryReqRejected    DeliveryRequest[]     @relation("DeliveryRequestRejectedBy")
   aggregatorTypesCreated AggregatorType[]      @relation("AggregatorTypeCreatedBy")
+  dupApprovalsRequested  DuplicateLeadApproval[] @relation("DupApprovalRequestedBy")
+  dupApprovalsDecided    DuplicateLeadApproval[] @relation("DupApprovalDecidedBy")
   deliveryReqAssigned    DeliveryRequest[]     @relation("DeliveryRequestAssignedToStore")
   deliveryRequestLogs    DeliveryRequestLog[]  @relation("DeliveryRequestLogPerformedBy")
 
@@ -454,6 +456,37 @@ model AggregatorType {
 }
 
 // Per-user notifications emitted on stage transitions (CLAUDE.md §3).
+// Sales may ask admin to allow creating a DUPLICATE lead (same email/mobile,
+// e.g. the same franchise at a second location). One approval covers exactly
+// one creation of exactly the requested contact identity, by the requester.
+enum DuplicateApprovalStatus {
+  PENDING
+  APPROVED
+  REJECTED
+}
+
+model DuplicateLeadApproval {
+  id                    String                  @id @default(uuid())
+  email                 String
+  phone                 String?
+  organizationName      String? // context for the admin
+  reason                String? // requester's note, e.g. "second outlet, Baner"
+  duplicateOfLeadNumber String? // the clashing lead at request time
+  status                DuplicateApprovalStatus @default(PENDING)
+  requestedById         String
+  requestedBy           User                    @relation("DupApprovalRequestedBy", fields: [requestedById], references: [id])
+  decidedById           String?
+  decidedBy             User?                   @relation("DupApprovalDecidedBy", fields: [decidedById], references: [id])
+  decidedAt             DateTime?
+  rejectedReason        String?
+  consumedByLeadId      String?                 @unique // set when the approval is spent
+  createdAt             DateTime                @default(now())
+
+  @@index([status])
+  @@index([email, phone])
+  @@index([requestedById, status])
+}
+
 model Notification {
   id        String   @id @default(uuid())
   userId    String

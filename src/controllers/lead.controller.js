@@ -65,16 +65,61 @@ export const createLead = async (req, res) => {
     const { category, requirementDetails, ...contact } = result.data;
 
     const dupe = await findDuplicateLead(contact);
-    if (dupe) {
-      return res.status(400).json({
-        message: `This lead already exists (${dupe.leadNumber}).`,
-        errors: duplicateErrors(dupe, contact),
+    // An admin-APPROVED duplicate request (by this user, for exactly this
+    // email+mobile, not yet spent) unlocks ONE duplicate creation.
+    let exception = null;
+    if (dupe && !isAdmin(req.user)) {
+      exception = await prisma.duplicateLeadApproval.findFirst({
+        where: {
+          status: 'APPROVED',
+          consumedByLeadId: null,
+          requestedById: req.user.id,
+          email: { equals: contact.email, mode: 'insensitive' },
+          phone: contact.phone ?? null,
+        },
+        orderBy: { decidedAt: 'asc' },
+        select: { id: true },
       });
+      if (!exception) {
+        // Tell the form where the approval stands so it can offer the right action.
+        const latest = await prisma.duplicateLeadApproval.findFirst({
+          where: {
+            requestedById: req.user.id,
+            email: { equals: contact.email, mode: 'insensitive' },
+            phone: contact.phone ?? null,
+            consumedByLeadId: null,
+          },
+          orderBy: { createdAt: 'desc' },
+          select: { status: true, rejectedReason: true },
+        });
+        return res.status(400).json({
+          message: `This lead already exists (${dupe.leadNumber}).`,
+          errors: duplicateErrors(dupe, contact),
+          duplicate: {
+            leadNumber: dupe.leadNumber,
+            approvalStatus: latest?.status ?? 'NONE',
+            rejectedReason: latest?.rejectedReason ?? null,
+          },
+        });
+      }
     }
 
     const lead = await prisma.$transaction(async (tx) => {
+      // Spend the approval atomically with the creation — the conditional
+      // updateMany means two racing creates can't both use it.
+      if (exception) {
+        const { count } = await tx.duplicateLeadApproval.updateMany({
+          where: { id: exception.id, consumedByLeadId: null },
+          data: { consumedByLeadId: 'pending' },
+        });
+        if (count === 0) {
+          const err = new Error('This duplicate approval was already used.');
+          err.status = 400;
+          throw err;
+        }
+      }
       const leadNumber = await generateLeadNumber(tx);
-      return tx.lead.create({
+      const created = await tx.lead.create({
         data: {
           leadNumber,
           category,
@@ -86,6 +131,13 @@ export const createLead = async (req, res) => {
         },
         include: creatorSelect,
       });
+      if (exception) {
+        await tx.duplicateLeadApproval.update({
+          where: { id: exception.id },
+          data: { consumedByLeadId: created.id },
+        });
+      }
+      return created;
     });
 
     await logEvent({
@@ -99,6 +151,7 @@ export const createLead = async (req, res) => {
 
     return res.status(201).json({ message: 'Lead created.', data: lead });
   } catch (error) {
+    if (error?.status === 400) return res.status(400).json({ message: error.message });
     console.error('[lead.createLead]', error);
     return res.status(500).json({ message: 'Failed to create lead.' });
   }
