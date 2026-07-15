@@ -708,30 +708,31 @@ test('a lead walks the full pipeline NEW → COMPLETED', async () => {
 
 // ── Stage 12: per-aggregator NOC L3 config completeness ─────────────────────
 test('completeNocL3 requires a complete config per selected aggregator', async () => {
+  // OLT + MIKROTIK (no BNG — the BNG bypass rule doesn't apply here).
   const lead = await createLead({
     status: 'NOC_L3_PENDING',
     category: 'PIN_RATE',
     requirementDetails: {},
-    aggregatorTypes: ['BNG', 'MIKROTIK'],
-    aggregatorType: 'BNG',
+    aggregatorTypes: ['OLT', 'MIKROTIK'],
+    aggregatorType: 'OLT',
   });
-  const bng = { mikrotikIp: '10.0.0.2', mikrotikIdentity: 'MK-1', loopbackIp: '10.255.0.1', vsi: 'VSI-201', vlan: '100' };
+  const olt = { identity: 'OLT-1', ip: '10.1.0.2', gateway: '10.1.0.1', vlan: '200' };
   // MIKROTIK config missing entirely → 400
   await rejectsWithStatus(
-    () => sm.completeNocL3({ leadId: lead.id, actor: actor('NOC_L3_USER'), ipAllocation: { BNG: [bng] } }),
+    () => sm.completeNocL3({ leadId: lead.id, actor: actor('NOC_L3_USER'), ipAllocation: { OLT: [olt] } }),
     400,
   );
   // MIKROTIK config incomplete (one required key blank) → 400
   const mkPartial = { mikrotikIdentity: 'MK-2', mikrotikIp: '10.0.0.3', mikrotikGateway: '10.0.0.1', snatPool: '100.64.0.0/22', dynamicPool: '' };
   await rejectsWithStatus(
-    () => sm.completeNocL3({ leadId: lead.id, actor: actor('NOC_L3_USER'), ipAllocation: { BNG: [bng], MIKROTIK: [mkPartial] } }),
+    () => sm.completeNocL3({ leadId: lead.id, actor: actor('NOC_L3_USER'), ipAllocation: { OLT: [olt], MIKROTIK: [mkPartial] } }),
     400,
   );
   // Both complete → advances and stores the nested shape
   const mk = { mikrotikIdentity: 'MK-2', mikrotikIp: '10.0.0.3', mikrotikGateway: '10.0.0.1', snatPool: '100.64.0.0/22', dynamicPool: '10.10.0.0/16', vlan: '100' };
-  const updated = await sm.completeNocL3({ leadId: lead.id, actor: actor('NOC_L3_USER'), ipAllocation: { BNG: [bng], MIKROTIK: [mk] } });
+  const updated = await sm.completeNocL3({ leadId: lead.id, actor: actor('NOC_L3_USER'), ipAllocation: { OLT: [olt], MIKROTIK: [mk] } });
   assert.equal(updated.status, 'L3_TO_L2_HANDOFF');
-  assert.deepEqual(Object.keys(updated.ipAllocation).sort(), ['BNG', 'MIKROTIK']);
+  assert.deepEqual(Object.keys(updated.ipAllocation).sort(), ['MIKROTIK', 'OLT']);
   assert.equal(updated.ipAllocation.MIKROTIK[0].vlan, '100');
 });
 
@@ -750,6 +751,36 @@ test('completeNocL3 legacy lead (single aggregatorType, no array) needs just tha
 const MK_UNIT = (n) => ({
   mikrotikIdentity: `MK-${n}`, mikrotikIp: `10.0.0.${n}`, mikrotikGateway: '10.0.0.1',
   snatPool: '100.64.0.0/22', dynamicPool: '10.10.0.0/16', vlan: '100',
+});
+
+test('completeNocL3: MIKROTIK is optional when BNG is also selected', async () => {
+  const lead = await createLead({
+    status: 'NOC_L3_PENDING', category: 'PIN_RATE', requirementDetails: {},
+    aggregatorSelections: [{ type: 'BNG', quantity: 1 }, { type: 'MIKROTIK', quantity: 2 }],
+    aggregatorTypes: ['BNG', 'MIKROTIK'], aggregatorType: 'BNG',
+  });
+  const bng = { mikrotikIp: '10.0.0.2', mikrotikIdentity: 'MK-1', loopbackIp: '10.255.0.1', vsi: 'VSI-201', vlan: '100' };
+  // partial MIKROTIK (1 of 2 units) → still 400: fill it fully or leave it out
+  await rejectsWithStatus(
+    () => sm.completeNocL3({ leadId: lead.id, actor: actor('NOC_L3_USER'), ipAllocation: { BNG: [bng], MIKROTIK: [MK_UNIT(2)] } }),
+    400,
+  );
+  // BNG alone → advances; MIKROTIK bypassed and not stored
+  const updated = await sm.completeNocL3({ leadId: lead.id, actor: actor('NOC_L3_USER'), ipAllocation: { BNG: [bng] } });
+  assert.equal(updated.status, 'L3_TO_L2_HANDOFF');
+  assert.deepEqual(Object.keys(updated.ipAllocation), ['BNG']);
+});
+
+test('completeNocL3: MIKROTIK alone stays fully mandatory', async () => {
+  const lead = await createLead({
+    status: 'NOC_L3_PENDING', category: 'PIN_RATE', requirementDetails: {},
+    aggregatorSelections: [{ type: 'MIKROTIK', quantity: 1 }],
+    aggregatorTypes: ['MIKROTIK'], aggregatorType: 'MIKROTIK',
+  });
+  await rejectsWithStatus(
+    () => sm.completeNocL3({ leadId: lead.id, actor: actor('NOC_L3_USER'), ipAllocation: {} }),
+    400,
+  );
 });
 
 test('completeNocL3 BNG requires VLAN and VSI', async () => {

@@ -906,10 +906,14 @@ export const completeNocL3 = async ({ leadId, actor, ipAllocation }) => {
     : (lead.aggregatorTypes?.length ? lead.aggregatorTypes : [lead.aggregatorType || 'MIKROTIK'])
         .map((type) => ({ type, quantity: 1 }));
   const alloc = ipAllocation && typeof ipAllocation === 'object' ? ipAllocation : {};
+  // When BNG is selected, MIKROTIK configs are optional — the BNG carries the
+  // aggregation. All-or-nothing: leave MIKROTIK fully out, or provide every unit.
+  const hasBng = selections.some((s) => s.type === 'BNG');
   const stored = {};
   for (const { type, quantity } of selections) {
     const required = requiredKeysFor(type);
     const units = Array.isArray(alloc[type]) ? alloc[type] : [];
+    if (type === 'MIKROTIK' && hasBng && units.length === 0) continue; // bypassed
     if (units.length !== quantity) {
       throw httpError(400, `Provide ${quantity} ${type} configuration${quantity === 1 ? '' : 's'}.`);
     }
