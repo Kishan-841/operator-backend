@@ -711,7 +711,7 @@ test('NOC L2 queue rows keep network data but hide money and portal creds', asyn
   assert.equal(l.requirementDetails.bankDetails, undefined);
 });
 
-test('software docs-verify rows keep docs + portal creds but hide pricing and NOC configs', async () => {
+test('software docs-verify rows keep docs, portal creds and RATES but hide bank details, sizing, NOC configs', async () => {
   const lead = await fullLead({ status: 'DOCS_UPLOADED' });
   await addDocument(lead.id);
   const r = await request('GET', '/api/leads/docs-verify/queue', { token: tokens.software });
@@ -719,11 +719,14 @@ test('software docs-verify rows keep docs + portal creds but hide pricing and NO
   assert.equal(l.documents.length, 1, 'documents visible to software');
   assert.equal(l.portalUsername, 'viz-co');
   assert.equal(l.portalPassword, 'super-secret', 'software manages portal creds');
-  assert.equal(l.pricing, undefined);
+  // Rates are visible to sales, software and admin only.
+  assert.equal(l.pricing.ratePerMonth, 90000, 'stage-3 pricing visible to software');
+  assert.equal(l.requirementDetails?.percentageSplit, 60, 'rate keys visible to software');
   assert.equal(l.nocL2Config, undefined);
-  assert.equal(l.requirementDetails?.bankDetails, undefined);
+  assert.equal(l.requirementDetails?.bankDetails, undefined, 'bank details still hidden');
   assert.equal(l.requirementDetails?.userCount, undefined, 'sizing not software-relevant');
 });
+
 
 test('sales owner keeps commercial data but not internal NOC configs', async () => {
   const lead = await fullLead({ status: 'PRICING_PENDING' });

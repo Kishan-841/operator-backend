@@ -27,8 +27,10 @@ const GROUPS = [
   },
   { fields: ['email', 'existingServiceProvider', 'annualRevenue'], roles: [S, F, L2, L3, SW] },
   { fields: ['sourceOfLead', 'customerInterestLevel', 'notes'], roles: [S, F] },
+  // Rates are visible to sales, software and admins only.
+  { fields: ['pricing'], roles: [S, SW] },
   {
-    fields: ['pricing', 'approvalNotes', 'pricingRevisionReason', 'pricingRevisionCount', 'approvedById', 'approvedAt', 'approvedBy'],
+    fields: ['approvalNotes', 'pricingRevisionReason', 'pricingRevisionCount', 'approvedById', 'approvedAt', 'approvedBy'],
     roles: [S],
   },
   {
@@ -62,13 +64,15 @@ const GROUPS = [
 // requirementDetails is a mixed bag: sizing/technical keys are broadly useful,
 // commercial keys (rates, splits, bank account) are sales/admin only.
 const REQ_COMMERCIAL_KEYS = ['bankDetails', 'ratePerUser', 'percentageSplit', 'fixedRate', 'rateType'];
+// Rate keys (money terms, not bank identity) — visible to software too.
+const REQ_RATE_KEYS = ['ratePerUser', 'percentageSplit', 'fixedRate', 'rateType'];
 const REQ_ACCESS = {
   [S]: 'full',
   [F]: 'sizing',
   [D]: 'sizing',
   [L2]: 'sizing',
   [L3]: 'sizing',
-  [SW]: 'as-number', // software only needs the AS number (portal/network setup)
+  [SW]: 'rates', // software needs the AS number + the rates (agreement stage)
   [ST]: 'none',
 };
 
@@ -76,6 +80,14 @@ const stripRequirement = (details, access) => {
   if (!details || typeof details !== 'object') return details;
   if (access === 'full') return details;
   if (access === 'as-number') return details.asNumber != null ? { asNumber: details.asNumber } : undefined;
+  if (access === 'rates') {
+    const kept = {};
+    if (details.asNumber != null) kept.asNumber = details.asNumber;
+    for (const k of REQ_RATE_KEYS) {
+      if (details[k] !== undefined) kept[k] = details[k];
+    }
+    return Object.keys(kept).length ? kept : undefined;
+  }
   if (access === 'sizing') {
     const copy = { ...details };
     for (const k of REQ_COMMERCIAL_KEYS) delete copy[k];
