@@ -211,7 +211,8 @@ export const completeFeasibility = async ({
   });
 
   if (feasible) {
-    await notifyRoles(['SALES_USER'], {
+    // Pricing queue is owner-scoped — notify the lead's owner, not all of sales.
+    await notifyOneUser(salesOwner(lead), {
       type: 'STAGE_TRANSITION',
       title: `${lead.leadNumber} ready for pricing`,
       message: lead.organizationName,
@@ -463,6 +464,13 @@ export const skipMaterialReq = async ({ leadId, actor, reason }) => {
     newValue: 'DISPATCHED',
     actor,
     reason: note,
+  });
+  // Skipping material sends the lead straight to installation — tell delivery.
+  await notifyRoles(['DELIVERY_USER'], {
+    type: 'STAGE_TRANSITION',
+    title: `${lead.leadNumber} ready for installation`,
+    message: lead.organizationName,
+    leadId,
   });
   await refreshSidebarForRoles(['DELIVERY_USER', 'STORE_USER', ...ADMIN_ROLES]);
   return updated;
@@ -740,6 +748,13 @@ export const assignMaterial = async ({ leadId, actor, assignments }) => {
     message: lead.organizationName,
     leadId,
   });
+  // Installation is delivery's next stage — tell the team it's ready.
+  await notifyRoles(['DELIVERY_USER'], {
+    type: 'STAGE_TRANSITION',
+    title: `${lead.leadNumber} ready for installation`,
+    message: lead.organizationName,
+    leadId,
+  });
   await refreshSidebarForRoles(['STORE_USER', 'DELIVERY_USER', ...ADMIN_ROLES]);
   return updated;
 };
@@ -763,12 +778,23 @@ const advance = async ({ leadId, actor, from, to, data, notifyRole, notifyTitle,
     newValue: to,
     actor,
   });
-  await notifyRoles([notifyRole], {
-    type: 'STAGE_TRANSITION',
-    title: `${lead.leadNumber} ${notifyTitle}`,
-    message: lead.organizationName,
-    leadId,
-  });
+  // Sales-owned destination queues are scoped to the lead's owner — notify that
+  // one person, not every SALES_USER (who couldn't see or act on the lead).
+  if (notifyRole === 'SALES_USER') {
+    await notifyOneUser(salesOwner(lead), {
+      type: 'STAGE_TRANSITION',
+      title: `${lead.leadNumber} ${notifyTitle}`,
+      message: lead.organizationName,
+      leadId,
+    });
+  } else {
+    await notifyRoles([notifyRole], {
+      type: 'STAGE_TRANSITION',
+      title: `${lead.leadNumber} ${notifyTitle}`,
+      message: lead.organizationName,
+      leadId,
+    });
+  }
   await refreshSidebarForRoles([...outgoing, ...ADMIN_ROLES]);
   return updated;
 };
@@ -935,8 +961,11 @@ export const completeNocL3 = async ({ leadId, actor, ipAllocation }) => {
     from: 'NOC_L3_PENDING',
     to: 'L3_TO_L2_HANDOFF',
     data: { nocL3AssignedToId: actor.id, ipAllocation: stored, bngConfigDoneAt: new Date() },
-    notifyRole: 'NOC_L2_USER',
-    notifyTitle: 'L3→L2 assignment ready',
+    // The next action is NOC L3 ASSIGNING this handoff to a specific L2 user
+    // (assignL3ToL2 then notifies that individual). Notify NOC L3, not L2 —
+    // no L2 user can see the handoff until it's assigned to them.
+    notifyRole: 'NOC_L3_USER',
+    notifyTitle: 'ready to assign L3→L2 handoff',
     outgoing: ['NOC_L3_USER'],
   });
 };
