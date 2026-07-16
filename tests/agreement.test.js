@@ -36,10 +36,14 @@ before(async () => {
   server = app.listen(0);
   await new Promise((res) => server.once('listening', res));
   base = `http://127.0.0.1:${server.address().port}`;
-  const r = await request('POST', '/api/auth/login', {
-    body: { email: 'software_user@test.local', password: TEST_PASSWORD },
-  });
-  tokens.software = r.body?.token;
+  const login = async (role) => {
+    const rr = await request('POST', '/api/auth/login', {
+      body: { email: `${role.toLowerCase()}@test.local`, password: TEST_PASSWORD },
+    });
+    return rr.body?.token;
+  };
+  tokens.software = await login('SOFTWARE_USER');
+  tokens.sales = await login('SALES_USER');
 });
 
 beforeEach(cleanup);
@@ -72,6 +76,43 @@ test('agreement.docx template contains the {Agreement Date} placeholder', () => 
   const tpl = path.join(here, '..', 'src', 'templates', 'agreement.docx');
   const xml = new PizZip(fs.readFileSync(tpl)).file('word/document.xml').asText();
   assert.ok(xml.includes('{Agreement Date}'), 'placeholder present at the top of the template');
+});
+
+// ── Authorization on generate ─────────────────────────────────────────────────
+test('generate is blocked outside the agreement stage and for non-owners (no CAF burn)', async () => {
+  // Software may only generate at an agreement stage — a NEW lead → 404 (access denied).
+  const newLead = await createLead({ status: 'NEW' });
+  const early = await request('POST', `/api/leads/${newLead.id}/agreement/generate`, {
+    token: tokens.software,
+    body: { orgName: 'Acme ISP' },
+  });
+  assert.equal(early.status, 404);
+
+  // A sales user who doesn't own the lead can't generate (404, no CAF burned).
+  const owned = await createLead({ status: 'AGREEMENT_PENDING' }); // owned by SALES_USER default
+  const otherSales = await prisma.user.upsert({
+    where: { email: 'sales-x@test.local' },
+    update: { isActive: true },
+    create: { name: 'Other Sales', email: 'sales-x@test.local', password: 'x', role: 'SALES_USER' },
+  });
+  const foreign = await createLead({ status: 'AGREEMENT_PENDING', assignedSalesId: otherSales.id });
+  const denied = await request('POST', `/api/leads/${foreign.id}/agreement/generate`, {
+    token: tokens.sales,
+    body: { orgName: 'Acme ISP' },
+  });
+  assert.equal(denied.status, 404);
+  assert.equal(
+    (await prisma.lead.findUnique({ where: { id: foreign.id }, select: { cafNumber: true } })).cafNumber,
+    null,
+    'no CAF burned on a denied request',
+  );
+
+  // The owner at the agreement stage still works.
+  const ok = await request('POST', `/api/leads/${owned.id}/agreement/generate`, {
+    token: tokens.sales,
+    body: { orgName: 'Acme ISP' },
+  });
+  assert.equal(ok.status, 200);
 });
 
 // ── ISP SLA ───────────────────────────────────────────────────────────────────

@@ -2,6 +2,12 @@ import prisma from '../config/db.js';
 import * as svc from '../services/agreement.service.js';
 import { readFileBuffer } from '../services/storage.service.js';
 import { generateCafNumber } from '../services/leadNumber.service.js';
+import { assertLeadAccess } from '../utils/leadAccess.js';
+import { isAdmin } from '../utils/roleHelper.js';
+
+// Generation is only meaningful once the lead has reached the agreement stage —
+// this is what protects the CAF number from being burned early.
+const AGREEMENT_STAGES = ['AGREEMENT_PENDING', 'AGREEMENT_SENT_FOR_SIGNATURE', 'COMPLETED'];
 
 /**
  * POST /api/leads/:id/agreement/generate (SOFTWARE / SALES)
@@ -13,9 +19,16 @@ export const generateAgreement = async (req, res) => {
   try {
     const lead = await prisma.lead.findUnique({
       where: { id: req.params.id },
-      select: { id: true, leadNumber: true, category: true, cafNumber: true },
+      select: { id: true, leadNumber: true, category: true, cafNumber: true, status: true, assignedSalesId: true },
     });
     if (!lead) return res.status(404).json({ message: 'Lead not found.' });
+    // Object-level access: a sales user must own the lead; a software user must
+    // be at one of their stages. Throws a 404 (never revealing existence).
+    assertLeadAccess(req.user, lead);
+    // Stage guard: don't stamp/CAF-burn a lead that isn't at the agreement stage.
+    if (!isAdmin(req.user) && !AGREEMENT_STAGES.includes(lead.status)) {
+      return res.status(400).json({ message: 'This lead has not reached the agreement stage yet.' });
+    }
     const isIsp = lead.category === 'ISP';
 
     const orgName = String(req.body?.orgName || '').trim();
@@ -98,6 +111,7 @@ export const generateAgreement = async (req, res) => {
     res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
     return res.send(buffer);
   } catch (error) {
+    if (error?.status === 404) return res.status(404).json({ message: error.message });
     if (error?.status === 400) return res.status(400).json({ message: error.message });
     console.error('[agreement.generate]', error?.message || error);
     return res.status(500).json({ message: 'Failed to generate the agreement.' });
