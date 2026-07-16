@@ -251,6 +251,30 @@ test("PUT /api/leads/:id blocks updating into another lead's email/mobile (self 
   assert.equal(ok.status, 200);
 });
 
+// ── Rejected documents can't satisfy the docs-verify gate ─────────────────────
+test('rejecting a document clears its approval and blocks completeDocs until re-approved', async () => {
+  const lead = await createLead({ status: 'DOCS_UPLOADED' });
+  const doc = await addApprovedDocument(lead.id); // salesApprovedAt set
+
+  // Reject it — should also clear salesApprovedAt and bounce the lead to APPROVED.
+  const rej = await request('PATCH', `/api/leads/${lead.id}/documents/${doc.id}/verification`, {
+    token: tokens.software,
+    body: { status: 'REJECTED', note: 'wrong file' },
+  });
+  assert.equal(rej.status, 200);
+  const after = await prisma.leadDocument.findUnique({
+    where: { id: doc.id },
+    select: { salesApprovedAt: true, verificationStatus: true },
+  });
+  assert.equal(after.salesApprovedAt, null, 'approval cleared on reject');
+  assert.equal(after.verificationStatus, 'REJECTED');
+
+  // Put the lead back to DOCS_UPLOADED with the doc still REJECTED; the gate must block.
+  await prisma.lead.update({ where: { id: lead.id }, data: { status: 'DOCS_UPLOADED' } });
+  const blocked = await request('POST', `/api/leads/${lead.id}/complete-docs`, { token: tokens.software });
+  assert.equal(blocked.status, 400, 'completeDocs blocked while a rejected doc is present');
+});
+
 // ── Vendor list authorization ─────────────────────────────────────────────────
 test('GET /api/vendors is restricted to admin/sales; other roles get 403 (no bank-detail leak)', async () => {
   await prisma.vendor.create({

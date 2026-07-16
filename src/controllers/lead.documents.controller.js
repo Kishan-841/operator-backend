@@ -168,6 +168,10 @@ export const setDocumentVerification = async (req, res) => {
           verificationNote: note,
           verifiedById: req.user.id,
           verifiedAt: new Date(),
+          // Clear the prior sales approval — a rejected doc must be re-approved,
+          // otherwise a stale salesApprovedAt would satisfy the completeDocs gate.
+          salesApprovedAt: null,
+          salesApprovedById: null,
         },
         select: docPublic,
       });

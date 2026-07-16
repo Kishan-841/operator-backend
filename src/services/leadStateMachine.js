@@ -367,8 +367,13 @@ export const completeDocs = async ({ leadId, actor }) => {
   }
   // Docs are optional until the agreement close-out, but whatever WAS uploaded
   // must be verified (approved) before the lead can proceed.
-  const docs = await prisma.leadDocument.findMany({ where: { leadId }, select: { salesApprovedAt: true } });
-  if (docs.some((d) => !d.salesApprovedAt)) {
+  const docs = await prisma.leadDocument.findMany({
+    where: { leadId },
+    select: { salesApprovedAt: true, verificationStatus: true },
+  });
+  // Every uploaded doc must be approved AND not left in a REJECTED state
+  // (defense in depth — rejecting a doc already clears its approval).
+  if (docs.some((d) => !d.salesApprovedAt || d.verificationStatus === 'REJECTED')) {
     throw httpError(400, 'Verify (approve) all uploaded documents before completing this stage.');
   }
 
