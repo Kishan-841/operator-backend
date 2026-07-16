@@ -97,6 +97,20 @@ test('login with unknown email → 401', async () => {
   assert.equal(r.status, 401);
 });
 
+test('login with a non-string email → 400 (not a 500 crash)', async () => {
+  const r = await request('POST', '/api/auth/login', { body: { email: 12345, password: 'x' } });
+  assert.equal(r.status, 400);
+});
+
+test('reject with a non-string reason → 400 (not a 500 crash)', async () => {
+  const lead = await createLead({ status: 'PENDING_APPROVAL' });
+  const r = await request('POST', `/api/leads/${lead.id}/reject`, {
+    token: tokens.admin,
+    body: { reason: { note: 'bad' } },
+  });
+  assert.equal(r.status, 400);
+});
+
 test('login missing credentials → 400', async () => {
   const r = await request('POST', '/api/auth/login', { body: { email: 'x@test.local' } });
   assert.equal(r.status, 400);

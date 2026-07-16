@@ -366,25 +366,26 @@ export const completeDocs = async ({ leadId, actor }) => {
   if (lead.status !== 'DOCS_UPLOADED') {
     throw httpError(409, 'This lead is not currently awaiting docs verification. Refresh to see where it is now.');
   }
-  // Docs are optional until the agreement close-out, but whatever WAS uploaded
-  // must be verified (approved) before the lead can proceed.
-  const docs = await prisma.leadDocument.findMany({
-    where: { leadId },
-    select: { salesApprovedAt: true, verificationStatus: true },
-  });
-  // Every uploaded doc must be approved AND not left in a REJECTED state
-  // (defense in depth — rejecting a doc already clears its approval).
-  if (docs.some((d) => !d.salesApprovedAt || d.verificationStatus === 'REJECTED')) {
-    throw httpError(400, 'Verify (approve) all uploaded documents before completing this stage.');
-  }
 
-  // Rejection happens BEFORE delivery (stage 5b), so completion always
-  // continues down the normal pipeline; any revision reason is now resolved.
-  const nextStatus = 'DELIVERY_REQ_PENDING';
-  const updated = await applyTransition(leadId, 'DOCS_UPLOADED', {
-    status: nextStatus,
-    docsRevisionReason: null,
+  // Lock the lead row and re-check the docs INSIDE the transaction, so a
+  // concurrent (un)approval can't slip between the check and the transition
+  // (the approval endpoint takes the same lock — see setDocumentSalesApproval).
+  const updated = await prisma.$transaction(async (tx) => {
+    await tx.$queryRaw`SELECT id FROM "Lead" WHERE id = ${leadId} FOR UPDATE`;
+    const docs = await tx.leadDocument.findMany({
+      where: { leadId },
+      select: { salesApprovedAt: true, verificationStatus: true },
+    });
+    // Every uploaded doc must be approved AND not left in a REJECTED state
+    // (defense in depth — rejecting a doc already clears its approval).
+    if (docs.some((d) => !d.salesApprovedAt || d.verificationStatus === 'REJECTED')) {
+      throw httpError(400, 'Verify (approve) all uploaded documents before completing this stage.');
+    }
+    // Rejection happens BEFORE delivery (stage 5b), so completion always
+    // continues down the normal pipeline; any revision reason is now resolved.
+    return applyTransition(leadId, 'DOCS_UPLOADED', { status: 'DELIVERY_REQ_PENDING', docsRevisionReason: null }, tx);
   });
+  const nextStatus = 'DELIVERY_REQ_PENDING';
 
   await logStatusChange({
     entityType: 'Lead',
@@ -551,7 +552,7 @@ export const approveMaterialRequest = async ({ leadId, actor }) => {
   if (lead.status !== 'MATERIAL_APPROVAL_PENDING') {
     throw httpError(409, 'This lead is not currently awaiting material approval. Refresh to see where it is now.');
   }
-  const dr = await prisma.deliveryRequest.findUnique({ where: { leadId }, select: { id: true } });
+  const dr = await prisma.deliveryRequest.findUnique({ where: { leadId }, select: { id: true, requestedById: true } });
 
   const updated = await prisma.$transaction(async (tx) => {
     const moved = await applyTransition(leadId, 'MATERIAL_APPROVAL_PENDING', { status: 'AWAITING_DISPATCH' }, tx);
@@ -578,6 +579,16 @@ export const approveMaterialRequest = async ({ leadId, actor }) => {
     message: lead.organizationName,
     leadId,
   });
+  // Tell the delivery user who raised the request that it was approved
+  // (mirrors the reject path, which already notifies them).
+  if (dr?.requestedById) {
+    await notifyOneUser(dr.requestedById, {
+      type: 'STAGE_TRANSITION',
+      title: `${lead.leadNumber} material request approved`,
+      message: lead.organizationName,
+      leadId,
+    });
+  }
   await refreshSidebarForRoles(['STORE_USER', 'DELIVERY_USER', ...ADMIN_ROLES]);
   return updated;
 };

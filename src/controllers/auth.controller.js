@@ -29,7 +29,7 @@ export const login = async (req, res) => {
     // `|| {}` guards probes / malformed requests that arrive without a JSON body.
     const { email, password } = req.body || {};
 
-    if (!email || !password) {
+    if (typeof email !== 'string' || typeof password !== 'string' || !email || !password) {
       return res.status(400).json({ message: 'Email and password are required.' });
     }
 

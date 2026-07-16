@@ -100,6 +100,9 @@ export const createUser = async (req, res) => {
     if (!name || !email || !password || !role) {
       return res.status(400).json({ message: 'Name, email, password, and role are required.' });
     }
+    if (typeof email !== 'string' || typeof password !== 'string' || typeof name !== 'string') {
+      return res.status(400).json({ message: 'Name, email, and password must be text.' });
+    }
     if (!VALID_ROLES.includes(role)) {
       return res.status(400).json({ message: 'Invalid role.' });
     }
@@ -160,6 +163,11 @@ export const updateUser = async (req, res) => {
       return res.status(400).json({ message: 'Invalid role.' });
     }
 
+    if ((name != null && typeof name !== 'string') ||
+        (email != null && typeof email !== 'string') ||
+        (password != null && typeof password !== 'string')) {
+      return res.status(400).json({ message: 'Name, email, and password must be text.' });
+    }
     const data = {};
     if (name) data.name = name.trim();
     if (role) data.role = role;

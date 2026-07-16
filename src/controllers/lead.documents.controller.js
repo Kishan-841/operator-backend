@@ -270,13 +270,18 @@ export const setDocumentSalesApproval = async (req, res) => {
     });
     if (!doc) return res.status(404).json({ message: 'Document not found.' });
 
-    const updated = await prisma.leadDocument.update({
-      where: { id: doc.id },
-      data: {
-        salesApprovedAt: approved ? new Date() : null,
-        salesApprovedById: approved ? req.user.id : null,
-      },
-      select: docPublic,
+    // Lock the lead row so an (un)approval can't race completeDocs' gate check
+    // (completeDocs takes the same lock before verifying + transitioning).
+    const updated = await prisma.$transaction(async (tx) => {
+      await tx.$queryRaw`SELECT id FROM "Lead" WHERE id = ${req.params.id} FOR UPDATE`;
+      return tx.leadDocument.update({
+        where: { id: doc.id },
+        data: {
+          salesApprovedAt: approved ? new Date() : null,
+          salesApprovedById: approved ? req.user.id : null,
+        },
+        select: docPublic,
+      });
     });
     await logEvent({
       action: approved ? 'DOC_SALES_APPROVED' : 'DOC_SALES_UNAPPROVED',

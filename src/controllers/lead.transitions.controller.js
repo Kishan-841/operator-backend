@@ -6,6 +6,11 @@ import { validateMaterialReq } from '../validation/stage4.js';
 import { validateAggregator, validateIpAllocation } from '../validation/stage5.js';
 import { actorFromReq } from '../utils/requestContext.js';
 
+// Free-text body fields (notes / reason / config notes / portal creds) must be
+// strings — coerce anything else to null so a stray object/number can't reach
+// Prisma and 500 (required-text guards in the state machine then 400 cleanly).
+const asText = (v) => (typeof v === 'string' ? v : null);
+
 // Map a state-machine error (carrying .status) to a response.
 const fail = (res, error) => {
   if (error?.status) return res.status(error.status).json({ message: error.message });
@@ -95,7 +100,7 @@ export const completeFeasibility = async (req, res) => {
       leadId: req.params.id,
       actor: actorFromReq(req),
       feasible,
-      notes,
+      notes: asText(notes),
       vendors: segments,
       popIds,
       latitude,
@@ -138,7 +143,7 @@ export const approveLead = async (req, res) => {
     const data = await sm.approveLead({
       leadId: req.params.id,
       actor: actorFromReq(req),
-      notes: req.body?.notes,
+      notes: asText(req.body?.notes),
     });
     return res.json({ message: 'Lead approved.', data });
   } catch (error) {
@@ -149,7 +154,7 @@ export const approveLead = async (req, res) => {
 /** POST /api/leads/:id/reject (ADMIN) { reason } */
 export const rejectLead = async (req, res) => {
   try {
-    const data = await sm.rejectLead({ leadId: req.params.id, actor: actorFromReq(req), reason: req.body?.reason });
+    const data = await sm.rejectLead({ leadId: req.params.id, actor: actorFromReq(req), reason: asText(req.body?.reason) });
     return res.json({ message: 'Sent back to sales to revise pricing.', data });
   } catch (error) {
     return fail(res, error);
@@ -182,7 +187,7 @@ export const skipMaterialReq = async (req, res) => {
     const data = await sm.skipMaterialReq({
       leadId: req.params.id,
       actor: actorFromReq(req),
-      reason: req.body?.reason,
+      reason: asText(req.body?.reason),
     });
     return res.json({ message: 'Marked as no material required — moved to installation.', data });
   } catch (error) {
@@ -220,7 +225,7 @@ export const rejectMaterialRequest = async (req, res) => {
     const data = await sm.rejectMaterialRequest({
       leadId: req.params.id,
       actor: actorFromReq(req),
-      reason: req.body?.reason,
+      reason: asText(req.body?.reason),
     });
     return res.json({ message: 'Material request sent back.', data });
   } catch (error) {
@@ -248,7 +253,7 @@ export const completeInstallation = async (req, res) => {
     const data = await sm.completeInstallation({
       leadId: req.params.id,
       actor: actorFromReq(req),
-      notes: req.body?.notes,
+      notes: asText(req.body?.notes),
     });
     return res.json({ message: 'Installation recorded.', data });
   } catch (error) {
@@ -277,7 +282,7 @@ export const completeNocL2 = async (req, res) => {
     const data = await sm.completeNocL2({
       leadId: req.params.id,
       actor: actorFromReq(req),
-      configNotes: req.body?.configNotes,
+      configNotes: asText(req.body?.configNotes),
       config,
     });
     return res.json({ message: 'NOC L2 config recorded.', data });
@@ -322,11 +327,11 @@ export const completeSoftware = async (req, res) => {
     const data = await sm.completeSoftware({
       leadId: req.params.id,
       actor: actorFromReq(req),
-      managedBy: req.body?.managedBy,
-      portalUsername: req.body?.portalUsername,
+      managedBy: asText(req.body?.managedBy),
+      portalUsername: asText(req.body?.portalUsername),
       portalUrl,
-      portalPassword: req.body?.portalPassword,
-      notes: req.body?.notes,
+      portalPassword: asText(req.body?.portalPassword),
+      notes: asText(req.body?.notes),
     });
     return res.json({ message: 'Software setup recorded.', data });
   } catch (error) {
@@ -354,7 +359,7 @@ export const completeL3ToL2 = async (req, res) => {
     const data = await sm.completeL3ToL2({
       leadId: req.params.id,
       actor: actorFromReq(req),
-      notes: req.body?.notes,
+      notes: asText(req.body?.notes),
     });
     return res.json({ message: 'L3→L2 assignment recorded.', data });
   } catch (error) {
@@ -373,7 +378,7 @@ export const assignL3ToL2 = async (req, res) => {
       leadId: req.params.id,
       actor: actorFromReq(req),
       assignedToId,
-      notes: req.body?.notes,
+      notes: asText(req.body?.notes),
     });
     return res.json({ message: 'Handoff assigned.', data });
   } catch (error) {
@@ -387,7 +392,7 @@ export const completeClientHandover = async (req, res) => {
     const data = await sm.completeClientHandover({
       leadId: req.params.id,
       actor: actorFromReq(req),
-      notes: req.body?.notes,
+      notes: asText(req.body?.notes),
     });
     return res.json({ message: 'Client handover recorded.', data });
   } catch (error) {
