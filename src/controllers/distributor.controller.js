@@ -115,7 +115,13 @@ export const createDistributor = async (req, res) => {
     if (clash) {
       return res.status(400).json({ message: `Distributor "${clash.name}" already uses these contact details.` });
     }
-    const created = await prisma.distributor.create({ data });
+    // "Make this the default" — exactly one default at a time: demote the
+    // current one in the same transaction.
+    const wantsDefault = req.body?.isDefault === true;
+    const created = await prisma.$transaction(async (tx) => {
+      if (wantsDefault) await tx.distributor.updateMany({ where: { isDefault: true }, data: { isDefault: false } });
+      return tx.distributor.create({ data: { ...data, isDefault: wantsDefault } });
+    });
     await logEvent({
       action: 'DISTRIBUTOR_CREATED',
       entityType: 'Distributor',
@@ -140,14 +146,25 @@ export const updateDistributor = async (req, res) => {
       return res.status(400).json({ message: result.message || 'Validation failed.', errors: result.errors });
     }
     const data = result.data;
-    if (dist.isDefault && data.name !== dist.name) {
-      return res.status(400).json({ message: 'GAZON is the default distributor — its name cannot be changed.' });
+    // You can't UNSET the default directly — promote another distributor
+    // instead (leads always need a fallback).
+    if (dist.isDefault && req.body?.isDefault === false) {
+      return res.status(400).json({
+        message: 'This is the default distributor — make another distributor the default instead of unsetting it.',
+      });
     }
     const clash = await findClash(data, dist.id);
     if (clash) {
       return res.status(400).json({ message: `Distributor "${clash.name}" already uses these contact details.` });
     }
-    const updated = await prisma.distributor.update({ where: { id: dist.id }, data });
+    const wantsDefault = req.body?.isDefault === true && !dist.isDefault;
+    const updated = await prisma.$transaction(async (tx) => {
+      if (wantsDefault) await tx.distributor.updateMany({ where: { isDefault: true }, data: { isDefault: false } });
+      return tx.distributor.update({
+        where: { id: dist.id },
+        data: { ...data, ...(wantsDefault ? { isDefault: true } : {}) },
+      });
+    });
     await logEvent({
       action: 'DISTRIBUTOR_UPDATED',
       entityType: 'Distributor',
@@ -168,7 +185,7 @@ export const deleteDistributor = async (req, res) => {
     const dist = await prisma.distributor.findUnique({ where: { id: req.params.id } });
     if (!dist) return res.status(404).json({ message: 'Distributor not found.' });
     if (dist.isDefault) {
-      return res.status(400).json({ message: 'GAZON is the default distributor and cannot be deleted.' });
+      return res.status(400).json({ message: 'The default distributor cannot be deleted — make another distributor the default first.' });
     }
     const gazon = await ensureDefaultDistributor();
     const moved = await prisma.$transaction(async (tx) => {
