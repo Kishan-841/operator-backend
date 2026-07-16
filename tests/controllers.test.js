@@ -251,6 +251,24 @@ test("PUT /api/leads/:id blocks updating into another lead's email/mobile (self 
   assert.equal(ok.status, 200);
 });
 
+// ── Admin documents browser ──────────────────────────────────────────────────
+test('GET /api/documents groups documents under their lead (one row per lead)', async () => {
+  const lead = await createLead();
+  await addDocument(lead.id, 'PAN');
+  await addDocument(lead.id, 'GST');
+  const r = await request('GET', '/api/documents', { token: tokens.admin });
+  assert.equal(r.status, 200);
+  assert.equal(r.body.items.length, 1, 'pagination counts leads, not documents');
+  const row = r.body.items[0];
+  assert.equal(row.id, lead.id);
+  assert.equal(row.documents.length, 2);
+  // Type filter narrows both the docs shown and the leads listed.
+  const filtered = await request('GET', '/api/documents?type=PAN', { token: tokens.admin });
+  assert.equal(filtered.body.items[0].documents.length, 1);
+  const none = await request('GET', '/api/documents?type=AGREEMENT', { token: tokens.admin });
+  assert.equal(none.body.items.length, 0);
+});
+
 // ── Duplicate-lead approval flow ─────────────────────────────────────────────
 test('duplicate approval: request → admin approves → one duplicate creation allowed', async () => {
   const first = await request('POST', '/api/leads', { token: tokens.sales, body: validLead() });

@@ -1,8 +1,8 @@
 import prisma from '../config/db.js';
 import { parsePagination, paginatedResponse } from '../utils/pagination.js';
 
-// Public document shape + its lead, for the admin documents browser.
-const docWithLead = {
+// Public document shape (its lead comes from the parent row).
+const docPublic = {
   id: true,
   type: true,
   label: true,
@@ -15,13 +15,13 @@ const docWithLead = {
   verifiedAt: true,
   uploadedBy: { select: { id: true, name: true } },
   verifiedBy: { select: { id: true, name: true } },
-  lead: { select: { id: true, leadNumber: true, organizationName: true } },
 };
 
 /**
- * GET /api/documents (admin) — every uploaded lead document, newest first.
- * Search (lead #, organisation, file name) + type + company filters + pagination.
- * Lets admins retrieve any doc — GST/PAN, agreements, etc. — lead-wise.
+ * GET /api/documents (admin) — GROUPED BY LEAD: one row per lead that has
+ * matching documents, its documents nested (newest first). Search matches the
+ * lead number, organisation, or any file name/label; the type filter narrows
+ * which documents show AND which leads appear. Pagination counts leads.
  */
 export const listAllDocuments = async (req, res) => {
   try {
@@ -30,30 +30,45 @@ export const listAllDocuments = async (req, res) => {
     const type = req.query.type ? String(req.query.type).trim() : '';
     const company = req.query.company ? String(req.query.company).trim() : '';
 
+    const docFilter = type ? { type } : {};
     const where = {
-      ...(type ? { type } : {}),
-      ...(company ? { lead: { is: { organizationName: company } } } : {}),
+      documents: { some: docFilter },
+      ...(company ? { organizationName: company } : {}),
       ...(term
         ? {
             OR: [
-              { fileName: { contains: term, mode: 'insensitive' } },
-              { label: { contains: term, mode: 'insensitive' } },
-              { lead: { is: { leadNumber: { contains: term, mode: 'insensitive' } } } },
-              { lead: { is: { organizationName: { contains: term, mode: 'insensitive' } } } },
+              { leadNumber: { contains: term, mode: 'insensitive' } },
+              { organizationName: { contains: term, mode: 'insensitive' } },
+              {
+                documents: {
+                  some: {
+                    ...docFilter,
+                    OR: [
+                      { fileName: { contains: term, mode: 'insensitive' } },
+                      { label: { contains: term, mode: 'insensitive' } },
+                    ],
+                  },
+                },
+              },
             ],
           }
         : {}),
     };
 
     const [items, total] = await Promise.all([
-      prisma.leadDocument.findMany({
+      prisma.lead.findMany({
         where,
-        select: docWithLead,
-        orderBy: { createdAt: 'desc' },
+        select: {
+          id: true,
+          leadNumber: true,
+          organizationName: true,
+          documents: { where: docFilter, select: docPublic, orderBy: { createdAt: 'desc' } },
+        },
+        orderBy: { leadNumber: 'desc' },
         skip,
         take: limit,
       }),
-      prisma.leadDocument.count({ where }),
+      prisma.lead.count({ where }),
     ]);
     return res.json(paginatedResponse({ items, total, page, limit }));
   } catch (error) {
