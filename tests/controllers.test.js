@@ -232,6 +232,16 @@ test('POST /api/leads blocks duplicates by email or mobile; rejected leads may b
   assert.equal(again.status, 201);
 });
 
+test('two concurrent creates of the same contact → exactly one wins (no TOCTOU dup)', async () => {
+  const [a, b] = await Promise.all([
+    request('POST', '/api/leads', { token: tokens.sales, body: validLead() }),
+    request('POST', '/api/leads', { token: tokens.sales, body: validLead() }),
+  ]);
+  const statuses = [a.status, b.status].sort();
+  assert.deepEqual(statuses, [201, 400], 'one created, one blocked');
+  assert.equal(await prisma.lead.count({ where: { email: 'ops@acme.test', status: { not: 'REJECTED' } } }), 1);
+});
+
 test("PUT /api/leads/:id blocks updating into another lead's email/mobile (self excluded)", async () => {
   const a = await request('POST', '/api/leads', { token: tokens.sales, body: validLead() });
   assert.equal(a.status, 201);

@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import prismaPkg from '@prisma/client';
 import prisma from '../config/db.js';
 import { parsePagination, paginatedResponse } from '../utils/pagination.js';
@@ -67,12 +68,12 @@ const resolveDistributorId = async (rawId) => {
 // A lead is a duplicate when its email or mobile number matches an existing
 // lead. REJECTED leads don't block — a franchise turned down earlier may
 // legitimately be re-created later.
-const findDuplicateLead = async ({ email, phone }, excludeId) => {
+const findDuplicateLead = async ({ email, phone }, excludeId, client = prisma) => {
   const or = [];
   if (email) or.push({ email: { equals: email, mode: 'insensitive' } });
   if (phone) or.push({ phone });
   if (!or.length) return null;
-  return prisma.lead.findFirst({
+  return client.lead.findFirst({
     where: {
       status: { not: 'REJECTED' },
       OR: or,
@@ -80,6 +81,13 @@ const findDuplicateLead = async ({ email, phone }, excludeId) => {
     },
     select: { leadNumber: true, email: true, phone: true },
   });
+};
+
+// A stable 31-bit advisory-lock key for a contact identity, so concurrent
+// creates of the same email serialize through the duplicate check.
+const contactLockKey = (email) => {
+  const h = createHash('sha1').update(String(email || '').trim().toLowerCase()).digest();
+  return h.readInt32BE(0) & 0x7fffffff;
 };
 
 const duplicateErrors = (dupe, { email, phone }) => {
@@ -154,7 +162,22 @@ export const createLead = async (req, res) => {
     const distributorId = await resolveDistributorId(req.body?.distributorId);
     const ownerId = await resolveOwnerId(req, req.user.id);
 
+    // Did we deliberately decide to allow this duplicate (admin override, or a
+    // consumed approval)? If not, we must re-check inside the lock below.
+    const intentionalDuplicate = Boolean(dupe);
+
     const lead = await prisma.$transaction(async (tx) => {
+      // Serialize concurrent creates of the same contact so the duplicate check
+      // can't be raced (there is no DB uniqueness — REJECTED leads may repeat).
+      await tx.$executeRaw`SELECT pg_advisory_xact_lock(${contactLockKey(contact.email)})`;
+      if (!intentionalDuplicate) {
+        const clash = await findDuplicateLead(contact, undefined, tx);
+        if (clash) {
+          const err = new Error(`This lead already exists (${clash.leadNumber}).`);
+          err.status = 400;
+          throw err;
+        }
+      }
       // Spend the approval atomically with the creation — the conditional
       // updateMany means two racing creates can't both use it.
       if (exception) {

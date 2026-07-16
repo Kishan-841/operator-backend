@@ -10,12 +10,23 @@ import { actorFromReq } from '../utils/requestContext.js';
  * pre-existing rows where distributorId is still null.
  */
 
-/** Idempotently ensure the GAZON default exists; returns it. */
+// Stable key for the transaction-scoped advisory lock that serializes the
+// first-ever default-distributor seed (arbitrary constant, shared by all callers).
+const DEFAULT_DISTRIBUTOR_LOCK = 428931001;
+
+/** Idempotently ensure the default distributor exists; returns it. */
 export const ensureDefaultDistributor = async () => {
+  // Fast path — a default already exists, no locking needed.
   const existing = await prisma.distributor.findFirst({ where: { isDefault: true } });
   if (existing) return existing;
-  // create() (not upsert) — name isn't unique; the isDefault findFirst is the guard.
-  return prisma.distributor.create({ data: { name: 'GAZON', isDefault: true } });
+  // First-seed path: serialize concurrent callers with a Postgres advisory lock
+  // so two requests on a fresh DB can't both create a default row.
+  return prisma.$transaction(async (tx) => {
+    await tx.$executeRaw`SELECT pg_advisory_xact_lock(${DEFAULT_DISTRIBUTOR_LOCK})`;
+    const again = await tx.distributor.findFirst({ where: { isDefault: true } });
+    if (again) return again;
+    return tx.distributor.create({ data: { name: 'GAZON', isDefault: true } });
+  });
 };
 
 // GAZON's leads = its own id ∪ null (legacy rows predating distributors).
