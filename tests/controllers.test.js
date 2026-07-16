@@ -251,6 +251,25 @@ test("PUT /api/leads/:id blocks updating into another lead's email/mobile (self 
   assert.equal(ok.status, 200);
 });
 
+// ── Vendor list authorization ─────────────────────────────────────────────────
+test('GET /api/vendors is restricted to admin/sales; other roles get 403 (no bank-detail leak)', async () => {
+  await prisma.vendor.create({
+    data: {
+      type: 'COMMISSION', name: 'Acme Fiber', commissionPercentage: 12.5,
+      gst: 'GST123', pan: 'PAN123', bankDetails: { accountNumber: '9999', ifsc: 'HDFC0001' },
+    },
+  });
+  // Software (a non-manage role) must NOT be able to read the full vendor list.
+  const forbidden = await request('GET', '/api/vendors', { token: tokens.software });
+  assert.equal(forbidden.status, 403);
+  const l2 = await request('GET', '/api/vendors', { token: tokens.nocL2 });
+  assert.equal(l2.status, 403);
+  // Sales + admin still can (management surface).
+  const sales = await request('GET', '/api/vendors', { token: tokens.sales });
+  assert.equal(sales.status, 200);
+  assert.ok(sales.body.items.some((v) => v.bankDetails?.accountNumber === '9999'));
+});
+
 // ── Admin documents browser ──────────────────────────────────────────────────
 test('GET /api/documents groups documents under their lead (one row per lead)', async () => {
   const lead = await createLead();

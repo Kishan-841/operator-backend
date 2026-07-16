@@ -12,11 +12,12 @@ const router = Router();
 
 router.use(auth);
 
-// Any authenticated user can read vendors (feasibility picks them as segments);
-// only ADMIN / SALES_USER may create, edit, or delete.
+// The vendor list carries bank details / commission % / GST / PAN — admin+sales
+// only (it's the management surface). Feasibility picks vendors via /options,
+// which projects only id/name/type/companyName, so it stays open to any staff.
 const canManage = requireRole('SUPER_ADMIN', 'ADMIN', 'SALES_USER');
 
-router.get('/', listVendors);
+router.get('/', canManage, listVendors);
 router.get('/options', listVendorOptions);
 router.post('/', canManage, createVendor);
 router.put('/:id', canManage, updateVendor);
