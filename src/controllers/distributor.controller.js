@@ -115,13 +115,8 @@ export const createDistributor = async (req, res) => {
     if (clash) {
       return res.status(400).json({ message: `Distributor "${clash.name}" already uses these contact details.` });
     }
-    // "Make this the default" — exactly one default at a time: demote the
-    // current one in the same transaction.
-    const wantsDefault = req.body?.isDefault === true;
-    const created = await prisma.$transaction(async (tx) => {
-      if (wantsDefault) await tx.distributor.updateMany({ where: { isDefault: true }, data: { isDefault: false } });
-      return tx.distributor.create({ data: { ...data, isDefault: wantsDefault } });
-    });
+    // isDefault is not API-settable — the default was set up once and stays.
+    const created = await prisma.distributor.create({ data });
     await logEvent({
       action: 'DISTRIBUTOR_CREATED',
       entityType: 'Distributor',
@@ -146,25 +141,13 @@ export const updateDistributor = async (req, res) => {
       return res.status(400).json({ message: result.message || 'Validation failed.', errors: result.errors });
     }
     const data = result.data;
-    // You can't UNSET the default directly — promote another distributor
-    // instead (leads always need a fallback).
-    if (dist.isDefault && req.body?.isDefault === false) {
-      return res.status(400).json({
-        message: 'This is the default distributor — make another distributor the default instead of unsetting it.',
-      });
-    }
     const clash = await findClash(data, dist.id);
     if (clash) {
       return res.status(400).json({ message: `Distributor "${clash.name}" already uses these contact details.` });
     }
-    const wantsDefault = req.body?.isDefault === true && !dist.isDefault;
-    const updated = await prisma.$transaction(async (tx) => {
-      if (wantsDefault) await tx.distributor.updateMany({ where: { isDefault: true }, data: { isDefault: false } });
-      return tx.distributor.update({
-        where: { id: dist.id },
-        data: { ...data, ...(wantsDefault ? { isDefault: true } : {}) },
-      });
-    });
+    // isDefault is not API-settable — `data` never carries it, so the flag
+    // survives edits untouched.
+    const updated = await prisma.distributor.update({ where: { id: dist.id }, data });
     await logEvent({
       action: 'DISTRIBUTOR_UPDATED',
       entityType: 'Distributor',

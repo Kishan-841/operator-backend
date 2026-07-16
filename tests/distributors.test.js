@@ -173,46 +173,35 @@ test('the default cannot be deleted; deleting others reassigns franchises to the
   assert.equal(moved.distributorId, gazon.id);
 });
 
-test('isDefault on create/edit swaps the single default; unsetting directly is refused', async () => {
-  await request('GET', '/api/distributors/options', { token: tokens.admin }); // seeds GAZON default
+test('isDefault in request bodies is ignored — the default cannot be changed via the API', async () => {
+  await request('GET', '/api/distributors/options', { token: tokens.admin }); // seeds the default
   const gazon = await prisma.distributor.findFirst({ where: { isDefault: true } });
 
-  // Create a new distributor as the default → GAZON loses the flag.
+  // Creating with isDefault: true does NOT create a new default.
   const created = await request('POST', '/api/distributors', {
     token: tokens.admin,
     body: { name: 'My Own HQ', phone: '9777777777', isDefault: true },
   });
   assert.equal(created.status, 201);
-  assert.equal(created.body.data.isDefault, true);
-  const defaults = await prisma.distributor.findMany({ where: { isDefault: true } });
-  assert.equal(defaults.length, 1, 'exactly one default at all times');
-  assert.equal(defaults[0].id, created.body.data.id);
+  assert.equal(created.body.data.isDefault, false, 'flag ignored on create');
 
-  // The demoted GAZON is now a normal row — deletable.
-  const delOld = await request('DELETE', `/api/distributors/${gazon.id}`, { token: tokens.admin });
-  assert.equal(delOld.status, 200);
-
-  // Promote another via edit → swaps again.
-  const other = await prisma.distributor.create({ data: { name: 'Backup HQ' } });
-  const promoted = await request('PUT', `/api/distributors/${other.id}`, {
+  // Editing with isDefault: true does not promote either.
+  const promoted = await request('PUT', `/api/distributors/${created.body.data.id}`, {
     token: tokens.admin,
-    body: { name: 'Backup HQ', isDefault: true },
+    body: { name: 'My Own HQ', phone: '9777777777', isDefault: true },
   });
   assert.equal(promoted.status, 200);
-  assert.equal(promoted.body.data.isDefault, true);
-  assert.equal(await prisma.distributor.count({ where: { isDefault: true } }), 1);
+  assert.equal(promoted.body.data.isDefault, false, 'flag ignored on edit');
 
-  // Unsetting the default directly is refused — promote another instead.
-  const unset = await request('PUT', `/api/distributors/${other.id}`, {
+  // Editing the default with isDefault: false doesn't strip it.
+  const unset = await request('PUT', `/api/distributors/${gazon.id}`, {
     token: tokens.admin,
-    body: { name: 'Backup HQ', isDefault: false },
+    body: { name: gazon.name, isDefault: false },
   });
-  assert.equal(unset.status, 400);
-
-  // Fallback of unassigned leads follows the CURRENT default.
-  const lead = await createLead(); // distributorId null
-  const leads = await request('GET', `/api/distributors/${other.id}/leads`, { token: tokens.admin });
-  assert.ok(leads.body.items.some((l) => l.id === lead.id), 'null-distributor leads belong to the current default');
+  assert.equal(unset.status, 200);
+  const still = await prisma.distributor.findUnique({ where: { id: gazon.id }, select: { isDefault: true } });
+  assert.equal(still.isDefault, true, 'default flag untouched');
+  assert.equal(await prisma.distributor.count({ where: { isDefault: true } }), 1);
 });
 
 test('distributor list carries franchise counts; GAZON counts null-distributor leads', async () => {
