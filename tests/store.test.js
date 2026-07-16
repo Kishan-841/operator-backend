@@ -296,6 +296,26 @@ test('second partial receipt appends serials and completes the PO when full', as
   assert.deepEqual(r2.body.data.items[0].serialNumbers.sort(), ['SN-1', 'SN-2', 'SN-3', 'SN-4', 'SN-5', 'SN-6']);
 });
 
+test('concurrent receipts of different serials on the same item both land (no lost update)', async () => {
+  const p = await createProduct();
+  const po = (await makePO(p, { quantity: 4 })).body.data;
+  await request('POST', `/api/store/po-approval/${po.id}/approve`, { token: tokens.admin });
+  const stock = (items) =>
+    request('POST', `/api/store/purchase-orders/${po.id}/add-to-inventory`, { token: tokens.store, body: { items } });
+
+  // Fire two receipts in parallel — the FOR UPDATE lock must serialize them so
+  // neither overwrites the other's serials.
+  const [a, b] = await Promise.all([
+    stock([{ poItemId: po.items[0].id, serialNumbers: ['SN-A1', 'SN-A2'] }]),
+    stock([{ poItemId: po.items[0].id, serialNumbers: ['SN-B1', 'SN-B2'] }]),
+  ]);
+  assert.equal(a.status, 200);
+  assert.equal(b.status, 200);
+  const item = await prisma.storePurchaseOrderItem.findFirst({ where: { poId: po.id } });
+  assert.equal(item.stockedQuantity, 4, 'both receipts counted');
+  assert.deepEqual(item.serialNumbers.sort(), ['SN-A1', 'SN-A2', 'SN-B1', 'SN-B2']);
+});
+
 test('a serial that repeats one already received on the item → 400', async () => {
   const p = await createProduct();
   const po = (await makePO(p, { quantity: 4 })).body.data;

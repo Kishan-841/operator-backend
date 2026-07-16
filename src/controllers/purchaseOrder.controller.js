@@ -1,3 +1,4 @@
+import { Prisma } from '@prisma/client';
 import prisma from '../config/db.js';
 import { parsePagination, paginatedResponse } from '../utils/pagination.js';
 import { validatePurchaseOrder, validateAddToInventory } from '../validation/purchaseOrder.js';
@@ -161,77 +162,78 @@ export const rejectPurchaseOrder = async (req, res) => {
 };
 
 /** POST /api/store/purchase-orders/:id/add-to-inventory (STORE) — stock the items. */
+const httpError = (status, message) => Object.assign(new Error(message), { status });
+
 export const addToInventory = async (req, res) => {
   try {
     const result = validateAddToInventory(req.body);
     if (!result.ok) return res.status(400).json({ message: 'Validation failed.', errors: result.errors });
 
-    const po = await prisma.storePurchaseOrder.findUnique({
-      where: { id: req.params.id },
-      include: { items: { include: { product: { select: { unit: true, modelNumber: true } } } } },
-    });
-    if (!po) return res.status(404).json({ message: 'Purchase order not found.' });
-    if (po.status !== 'APPROVED') {
-      return res.status(409).json({ message: 'Only an approved purchase order can be stocked. Get it approved first.' });
-    }
-
-    // Validate each submitted item against its PO item + product unit. Receipts
-    // are CUMULATIVE — a partial delivery stocks what arrived and leaves the PO
-    // open (APPROVED) until every ordered unit is received.
-    const byId = Object.fromEntries(po.items.map((it) => [it.id, it]));
-    const writes = [];
-    for (const sub of result.data.items) {
-      const poItem = byId[sub.poItemId];
-      if (!poItem) return res.status(400).json({ message: 'An item does not belong to this purchase order.' });
-      const isBulk = poItem.product.unit === 'mtrs';
-      const already = poItem.stockedQuantity ?? 0;
-      const remaining = poItem.quantity - already;
-      if (remaining <= 0) {
-        return res.status(400).json({ message: `${poItem.product.modelNumber} is already fully received.` });
+    // Everything happens inside one transaction that FIRST locks the PO item
+    // rows (SELECT ... FOR UPDATE). This closes the read-modify-write race where
+    // two concurrent receipts on the same item each computed a full-replacement
+    // write from a stale snapshot and one overwrote the other's serials.
+    const { updated, stockedCount } = await prisma.$transaction(async (tx) => {
+      const po = await tx.storePurchaseOrder.findUnique({
+        where: { id: req.params.id },
+        include: { items: { include: { product: { select: { unit: true, modelNumber: true } } } } },
+      });
+      if (!po) throw httpError(404, 'Purchase order not found.');
+      if (po.status !== 'APPROVED') {
+        throw httpError(409, 'Only an approved purchase order can be stocked. Get it approved first.');
       }
-      if (isBulk) {
-        if (!sub.receivedQuantity) {
-          return res.status(400).json({ message: 'Enter the received quantity for the bulk item.' });
-        }
-        if (sub.receivedQuantity > remaining) {
-          return res.status(400).json({
-            message: `Only ${remaining} of ${poItem.quantity} m remain to be received for ${poItem.product.modelNumber}.`,
-          });
-        }
-        writes.push({
-          id: poItem.id,
-          serialNumbers: poItem.serialNumbers,
-          receivedQuantity: (poItem.receivedQuantity ?? 0) + sub.receivedQuantity,
-          stockedQuantity: already + sub.receivedQuantity,
-          addedToStoreAt: poItem.addedToStoreAt,
-        });
-      } else {
-        const serials = [...new Set((sub.serialNumbers || []).map((s) => s.trim()).filter(Boolean))];
-        if (serials.length === 0) {
-          return res.status(400).json({ message: 'Enter at least one serial number for the serialized item.' });
-        }
-        const dupes = serials.filter((s) => poItem.serialNumbers.includes(s));
-        if (dupes.length) {
-          return res.status(400).json({
-            message: `Already received on this item: ${dupes.join(', ')}. Remove the duplicate serial${dupes.length === 1 ? '' : 's'}.`,
-          });
-        }
-        if (serials.length > remaining) {
-          return res.status(400).json({
-            message: `Only ${remaining} of ${poItem.quantity} unit${remaining === 1 ? '' : 's'} remain to be received for ${poItem.product.modelNumber} — you entered ${serials.length} serials.`,
-          });
-        }
-        writes.push({
-          id: poItem.id,
-          serialNumbers: [...poItem.serialNumbers, ...serials],
-          receivedQuantity: (poItem.receivedQuantity ?? 0) + serials.length,
-          stockedQuantity: already + serials.length,
-          addedToStoreAt: poItem.addedToStoreAt,
-        });
+      const poItemIds = po.items.map((it) => it.id);
+      if (poItemIds.length) {
+        await tx.$queryRaw`SELECT id FROM "StorePurchaseOrderItem" WHERE id IN (${Prisma.join(poItemIds)}) FOR UPDATE`;
       }
-    }
+      // Re-read the locked rows so quantities/serials reflect any committed
+      // concurrent receipt, not the pre-lock snapshot.
+      const locked = await tx.storePurchaseOrderItem.findMany({
+        where: { poId: po.id },
+        include: { product: { select: { unit: true, modelNumber: true } } },
+      });
+      const byId = Object.fromEntries(locked.map((it) => [it.id, it]));
 
-    const updated = await prisma.$transaction(async (tx) => {
+      const writes = [];
+      for (const sub of result.data.items) {
+        const poItem = byId[sub.poItemId];
+        if (!poItem) throw httpError(400, 'An item does not belong to this purchase order.');
+        const isBulk = poItem.product.unit === 'mtrs';
+        const already = poItem.stockedQuantity ?? 0;
+        const remaining = poItem.quantity - already;
+        if (remaining <= 0) throw httpError(400, `${poItem.product.modelNumber} is already fully received.`);
+        if (isBulk) {
+          if (!sub.receivedQuantity) throw httpError(400, 'Enter the received quantity for the bulk item.');
+          if (sub.receivedQuantity > remaining) {
+            throw httpError(400, `Only ${remaining} of ${poItem.quantity} m remain to be received for ${poItem.product.modelNumber}.`);
+          }
+          writes.push({
+            id: poItem.id,
+            serialNumbers: poItem.serialNumbers,
+            receivedQuantity: (poItem.receivedQuantity ?? 0) + sub.receivedQuantity,
+            stockedQuantity: already + sub.receivedQuantity,
+            addedToStoreAt: poItem.addedToStoreAt,
+          });
+        } else {
+          const serials = [...new Set((sub.serialNumbers || []).map((s) => s.trim()).filter(Boolean))];
+          if (serials.length === 0) throw httpError(400, 'Enter at least one serial number for the serialized item.');
+          const dupes = serials.filter((s) => poItem.serialNumbers.includes(s));
+          if (dupes.length) {
+            throw httpError(400, `Already received on this item: ${dupes.join(', ')}. Remove the duplicate serial${dupes.length === 1 ? '' : 's'}.`);
+          }
+          if (serials.length > remaining) {
+            throw httpError(400, `Only ${remaining} of ${poItem.quantity} unit${remaining === 1 ? '' : 's'} remain to be received for ${poItem.product.modelNumber} — you entered ${serials.length} serials.`);
+          }
+          writes.push({
+            id: poItem.id,
+            serialNumbers: [...poItem.serialNumbers, ...serials],
+            receivedQuantity: (poItem.receivedQuantity ?? 0) + serials.length,
+            stockedQuantity: already + serials.length,
+            addedToStoreAt: poItem.addedToStoreAt,
+          });
+        }
+      }
+
       const now = new Date();
       for (const w of writes) {
         await tx.storePurchaseOrderItem.update({
@@ -253,18 +255,20 @@ export const addToInventory = async (req, res) => {
       if (items.every((it) => (it.stockedQuantity ?? 0) >= it.quantity)) {
         await tx.storePurchaseOrder.update({ where: { id: po.id }, data: { status: 'COMPLETED' } });
       }
-      return tx.storePurchaseOrder.findUnique({ where: { id: po.id }, include: poInclude });
+      const fresh = await tx.storePurchaseOrder.findUnique({ where: { id: po.id }, include: poInclude });
+      return { updated: fresh, stockedCount: writes.length, poNumber: po.poNumber };
     });
 
     await logEvent({
       action: 'PO_STOCKED',
       entityType: 'StorePurchaseOrder',
-      entityId: po.id,
-      summary: `Stocked ${writes.length} item${writes.length === 1 ? '' : 's'} from ${po.poNumber}`,
+      entityId: req.params.id,
+      summary: `Stocked ${stockedCount} item${stockedCount === 1 ? '' : 's'} from ${updated.poNumber}`,
       actor: actorFromReq(req),
     });
     return res.json({ message: 'Items added to inventory.', data: updated });
   } catch (error) {
+    if (error?.status) return res.status(error.status).json({ message: error.message });
     console.error('[po.addToInventory]', error);
     return res.status(500).json({ message: 'Failed to add items to inventory.' });
   }
