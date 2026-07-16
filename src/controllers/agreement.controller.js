@@ -1,6 +1,7 @@
 import prisma from '../config/db.js';
 import * as svc from '../services/agreement.service.js';
 import { readFileBuffer } from '../services/storage.service.js';
+import { generateCafNumber } from '../services/leadNumber.service.js';
 
 /**
  * POST /api/leads/:id/agreement/generate (SOFTWARE / SALES)
@@ -12,9 +13,10 @@ export const generateAgreement = async (req, res) => {
   try {
     const lead = await prisma.lead.findUnique({
       where: { id: req.params.id },
-      select: { leadNumber: true },
+      select: { id: true, leadNumber: true, category: true, cafNumber: true },
     });
     if (!lead) return res.status(404).json({ message: 'Lead not found.' });
+    const isIsp = lead.category === 'ISP';
 
     const orgName = String(req.body?.orgName || '').trim();
     if (!orgName) return res.status(400).json({ message: 'Organization name is required.' });
@@ -57,9 +59,27 @@ export const generateAgreement = async (req, res) => {
       }
     }
 
+    // ISP leads get the SLA template with an auto-assigned CAF number — claimed
+    // once (conditional updateMany so racing generates can't double-assign) and
+    // fixed for the lead's lifetime.
+    let cafNumber = lead.cafNumber;
+    if (isIsp && !cafNumber) {
+      const fresh = await generateCafNumber();
+      const { count } = await prisma.lead.updateMany({
+        where: { id: lead.id, cafNumber: null },
+        data: { cafNumber: fresh },
+      });
+      cafNumber = count
+        ? fresh
+        : (await prisma.lead.findUnique({ where: { id: lead.id }, select: { cafNumber: true } })).cafNumber;
+    }
+
     const { buffer, ext, contentType } = await svc.generateAgreement(
-      { orgName, orgAddress: req.body?.orgAddress, orgOwnerName: req.body?.orgOwnerName, agreementDate },
+      isIsp
+        ? { customerName: orgName, officeAddress: req.body?.orgAddress, effectiveDate: agreementDate, cafNumber }
+        : { orgName, orgAddress: req.body?.orgAddress, orgOwnerName: req.body?.orgOwnerName, agreementDate },
       [...docAttachments, ...(req.files || [])],
+      isIsp ? 'ISP_SLA' : 'FRANCHISE',
     );
 
     // Soft-stamp when the agreement was generated (drives the queue's step
@@ -73,7 +93,7 @@ export const generateAgreement = async (req, res) => {
       console.warn('[agreement.generate] could not stamp agreementGeneratedAt:', e?.message);
     }
 
-    const filename = `${lead.leadNumber}-agreement.${ext}`;
+    const filename = `${lead.leadNumber}-${isIsp ? 'sla' : 'agreement'}.${ext}`;
     res.setHeader('Content-Type', contentType);
     res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
     return res.send(buffer);

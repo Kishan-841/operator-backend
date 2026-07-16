@@ -74,6 +74,61 @@ test('agreement.docx template contains the {Agreement Date} placeholder', () => 
   assert.ok(xml.includes('{Agreement Date}'), 'placeholder present at the top of the template');
 });
 
+// ── ISP SLA ───────────────────────────────────────────────────────────────────
+test('isp_sla.docx template contains the four SLA placeholders', () => {
+  const here = path.dirname(fileURLToPath(import.meta.url));
+  const tpl = path.join(here, '..', 'src', 'templates', 'isp_sla.docx');
+  const xml = new PizZip(fs.readFileSync(tpl)).file('word/document.xml').asText();
+  for (const ph of ['{Effective Date}', '{Customer Name}', '{CAF No}', '{Office Address}']) {
+    assert.ok(xml.includes(ph), `${ph} present`);
+  }
+});
+
+test('ISP generate assigns an auto-incremented CAF once and keeps it on regeneration', async () => {
+  const leadA = await createLead({ status: 'AGREEMENT_PENDING' }); // ISP by default
+  const leadB = await createLead({ status: 'AGREEMENT_PENDING', email: 'b@x.test', phone: '9876500009' });
+
+  const genA = await request('POST', `/api/leads/${leadA.id}/agreement/generate`, {
+    token: tokens.software,
+    body: { orgName: 'Acme ISP', orgAddress: 'Pune', agreementDate: '2026-07-16' },
+  });
+  assert.equal(genA.status, 200);
+  const cafA = (await prisma.lead.findUnique({ where: { id: leadA.id }, select: { cafNumber: true } })).cafNumber;
+  assert.match(cafA, /^CAF-\d{2,}$/);
+
+  // Second generation on the same lead keeps the same CAF.
+  await request('POST', `/api/leads/${leadA.id}/agreement/generate`, {
+    token: tokens.software,
+    body: { orgName: 'Acme ISP' },
+  });
+  const cafA2 = (await prisma.lead.findUnique({ where: { id: leadA.id }, select: { cafNumber: true } })).cafNumber;
+  assert.equal(cafA2, cafA, 'CAF fixed for the lead');
+
+  // The next ISP lead gets the next number.
+  await request('POST', `/api/leads/${leadB.id}/agreement/generate`, {
+    token: tokens.software,
+    body: { orgName: 'Beta ISP' },
+  });
+  const cafB = (await prisma.lead.findUnique({ where: { id: leadB.id }, select: { cafNumber: true } })).cafNumber;
+  const n = (s) => Number(s.split('-')[1]);
+  assert.equal(n(cafB), n(cafA) + 1, 'auto-increment');
+});
+
+test('non-ISP generate never assigns a CAF', async () => {
+  const lead = await createLead({
+    status: 'AGREEMENT_PENDING',
+    category: 'PIN_RATE',
+    requirementDetails: {},
+  });
+  const r = await request('POST', `/api/leads/${lead.id}/agreement/generate`, {
+    token: tokens.software,
+    body: { orgName: 'Franchise Co' },
+  });
+  assert.equal(r.status, 200);
+  const caf = (await prisma.lead.findUnique({ where: { id: lead.id }, select: { cafNumber: true } })).cafNumber;
+  assert.equal(caf, null);
+});
+
 // ── Boundary validation ───────────────────────────────────────────────────────
 // ── Attaching already-uploaded lead documents ─────────────────────────────────
 test('generate rejects attachDocumentIds belonging to another lead → 400', async () => {

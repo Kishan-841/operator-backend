@@ -9,6 +9,7 @@ import { PDFDocument } from 'pdf-lib';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const TEMPLATE_PATH = path.join(here, '..', 'templates', 'agreement.docx');
+const ISP_SLA_TEMPLATE_PATH = path.join(here, '..', 'templates', 'isp_sla.docx');
 
 // "executed on this the {Agreement Date} at Pune" — legal ordinal style.
 const ordinal = (n) => {
@@ -29,6 +30,19 @@ const fill = ({ orgName, orgAddress, orgOwnerName, agreementDate }) => {
     'Org Address': orgAddress || '',
     'Org Owner Name': orgOwnerName || '',
     'Agreement Date': formatAgreementDate(agreementDate || new Date()),
+  });
+  return doc.getZip().generate({ type: 'nodebuffer' });
+};
+
+// The ISP SLA (Service Level Agreement) — four fill-ins at the top of the doc.
+const fillIspSla = ({ customerName, officeAddress, effectiveDate, cafNumber }) => {
+  const zip = new PizZip(fs.readFileSync(ISP_SLA_TEMPLATE_PATH));
+  const doc = new Docxtemplater(zip, { paragraphLoop: true, linebreaks: true });
+  doc.render({
+    'Effective Date': effectiveDate ? effectiveDate.toLocaleDateString('en-GB') : '',
+    'Customer Name': customerName || '',
+    'CAF No': cafNumber || '',
+    'Office Address': officeAddress || '',
   });
   return doc.getZip().generate({ type: 'nodebuffer' });
 };
@@ -110,8 +124,8 @@ const DOCX_TYPE = 'application/vnd.openxmlformats-officedocument.wordprocessingm
  * - With attachments: returns one combined PDF (agreement first, then each
  *   attachment); requires LibreOffice to render the agreement as PDF.
  */
-export const generateAgreement = async (data, attachments = []) => {
-  const docx = fill(data);
+export const generateAgreement = async (data, attachments = [], template = 'FRANCHISE') => {
+  const docx = template === 'ISP_SLA' ? fillIspSla(data) : fill(data);
   const agreementPdf = await officeToPdf(docx, 'docx');
 
   if (!agreementPdf) {

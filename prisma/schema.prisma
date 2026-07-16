@@ -289,6 +289,11 @@ model Lead {
 
   // Stage 15: when the agreement document was last generated & downloaded.
   agreementGeneratedAt DateTime?
+  // ISP only: CAF number stamped into the SLA — assigned once at the first
+  // generation (CAF-01, CAF-02, …) and fixed for the lead's lifetime.
+  // No @unique: the counter guarantees it, and the VM entrypoint's plain
+  // `prisma db push` refuses to add constraints non-interactively.
+  cafNumber            String?
   // Stage 15: when the generated agreement was sent to the operator to sign
   // (soft user ref — informational, like Notification.leadId).
   agreementSentForSignatureAt   DateTime?
