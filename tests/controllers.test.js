@@ -320,6 +320,30 @@ test('duplicate approval: rejection keeps creation blocked and reports REJECTED'
   assert.equal(blocked.body.duplicate?.approvalStatus, 'REJECTED');
 });
 
+test('lead deletion: sales may delete their own NEW leads; admin any; others blocked', async () => {
+  // Sales deletes their own NEW lead.
+  const own = await request('POST', '/api/leads', { token: tokens.sales, body: validLead() });
+  const del = await request('DELETE', `/api/leads/${own.body.data.id}`, { token: tokens.sales });
+  assert.equal(del.status, 200);
+  assert.equal(await prisma.lead.count({ where: { id: own.body.data.id } }), 0, 'row gone');
+
+  // Sales cannot delete once the lead entered the pipeline.
+  const moving = await createLead({ status: 'FEASIBILITY_PENDING' });
+  const blocked = await request('DELETE', `/api/leads/${moving.id}`, { token: tokens.sales });
+  assert.equal(blocked.status, 400);
+
+  // Sales cannot delete another owner's lead (404, never revealing existence).
+  const foreign = await createLead({ assignedSalesId: userId('ADMIN'), createdById: userId('ADMIN') });
+  const notMine = await request('DELETE', `/api/leads/${foreign.id}`, { token: tokens.sales });
+  assert.equal(notMine.status, 404);
+
+  // Admin deletes any lead at any stage (documents cascade).
+  await addDocument(moving.id);
+  const adminDel = await request('DELETE', `/api/leads/${moving.id}`, { token: tokens.admin });
+  assert.equal(adminDel.status, 200);
+  assert.equal(await prisma.lead.count({ where: { id: moving.id } }), 0);
+});
+
 test('admin can pick the lead owner; sales cannot assign others; invalid target → 400', async () => {
   // Admin assigns the lead to the sales user.
   const assigned = await request('POST', '/api/leads', {

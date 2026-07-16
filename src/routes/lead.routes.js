@@ -1,5 +1,5 @@
 import { Router } from 'express';
-import { createLead, getLeads, getLead, updateLead, updateIpDetails } from '../controllers/lead.controller.js';
+import { createLead, getLeads, getLead, updateLead, deleteLead, updateIpDetails } from '../controllers/lead.controller.js';
 import { getLeadNotes } from '../controllers/note.controller.js';
 import {
   requestDuplicateApproval,
@@ -99,6 +99,7 @@ router.get('/:id/notes', getLeadNotes);
 // --- CRUD ---
 router.post('/', requireRole('SALES_USER'), createLead);
 router.put('/:id', requireRole('SALES_USER'), updateLead);
+router.delete('/:id', requireRole('SALES_USER'), deleteLead); // sales: own NEW leads; admins: any
 router.patch('/:id/ip-details', requireRole('SALES_USER'), updateIpDetails);
 
 // --- Stage transitions (2–4) ---

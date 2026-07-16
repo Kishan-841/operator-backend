@@ -10,6 +10,7 @@ import { addLeadNote } from '../services/leadNote.service.js';
 import { stripLeadForRole, stripLeadsForRole } from '../utils/leadVisibility.js';
 import { actorFromReq } from '../utils/requestContext.js';
 import { isAdmin } from '../utils/roleHelper.js';
+import { refreshSidebarForRoles } from '../services/notification.service.js';
 
 // Lead fields worth diffing in the event log (scalars + the requirement blob).
 const LEAD_DIFF_FIELDS = [
@@ -204,6 +205,44 @@ export const createLead = async (req, res) => {
     if (error?.status === 400) return res.status(400).json({ message: error.message });
     console.error('[lead.createLead]', error);
     return res.status(500).json({ message: 'Failed to create lead.' });
+  }
+};
+
+/**
+ * DELETE /api/leads/:id — permanent, cascades documents/notes/requests.
+ * Sales may delete their OWN leads while still NEW (not yet in the pipeline);
+ * admins may delete any lead at any stage.
+ */
+export const deleteLead = async (req, res) => {
+  try {
+    const lead = await prisma.lead.findUnique({
+      where: { id: req.params.id },
+      select: { id: true, leadNumber: true, organizationName: true, status: true, assignedSalesId: true },
+    });
+    if (!lead) return res.status(404).json({ message: 'Lead not found.' });
+    if (!isAdmin(req.user)) {
+      if (lead.assignedSalesId !== req.user.id) {
+        return res.status(404).json({ message: 'Lead not found.' }); // never reveal existence
+      }
+      if (lead.status !== 'NEW') {
+        return res.status(400).json({
+          message: 'This lead is already in the pipeline — only an admin can delete it.',
+        });
+      }
+    }
+    await prisma.lead.delete({ where: { id: lead.id } });
+    await logEvent({
+      action: 'LEAD_DELETED',
+      entityType: 'Lead',
+      entityId: lead.id,
+      summary: `Deleted lead ${lead.leadNumber} — ${lead.organizationName} (was ${lead.status})`,
+      actor: actorFromReq(req),
+    });
+    await refreshSidebarForRoles(['SUPER_ADMIN', 'ADMIN']);
+    return res.json({ message: `Lead ${lead.leadNumber} deleted.` });
+  } catch (error) {
+    console.error('[lead.deleteLead]', error);
+    return res.status(500).json({ message: 'Failed to delete the lead.' });
   }
 };
 
