@@ -130,6 +130,27 @@ test('full operator-shaped payload creates a distributor with a stored profile',
   assert.equal(upd.body.data.profile.organizationName, 'West Head Renamed');
 });
 
+test('a PIN_RATE distributor saves without the prospect metrics (leads still require them)', async () => {
+  const body = {
+    category: 'PIN_RATE',
+    organizationName: 'Metric-less Head',
+    email: 'nometrics@dist.test',
+    phone: '9666600001',
+    whatsappNumber: '9666600001',
+    requirementDetails: {}, // no estimatedUserCount / ratePerUser — hidden for distributors
+  };
+  const r = await request('POST', '/api/distributors', { token: tokens.admin, body });
+  assert.equal(r.status, 201, 'distributor accepts an empty PIN_RATE requirement blob');
+  assert.equal(r.body.data.profile.category, 'PIN_RATE');
+
+  // The same payload as a LEAD is still rejected — the pipeline needs the metrics.
+  const asLead = await request('POST', '/api/leads', {
+    token: tokens.sales,
+    body: { ...body, email: 'lead@x.test', phone: '9666600002', whatsappNumber: '9666600002' },
+  });
+  assert.equal(asLead.status, 400, 'leads still require estimatedUserCount / ratePerUser');
+});
+
 test('duplicate distributor mobile/email → 400 naming the existing one', async () => {
   const first = await request('POST', '/api/distributors', {
     token: tokens.admin,

@@ -43,7 +43,7 @@ const leadScopeFor = (dist) =>
  */
 const normalize = (body = {}) => {
   if (body.organizationName !== undefined) {
-    const result = validateLeadPayload(body);
+    const result = validateLeadPayload(body, { variant: 'distributor' });
     if (!result.ok) return { ok: false, errors: result.errors };
     const { distributorId: _ignored, ...profile } = result.data;
     return {

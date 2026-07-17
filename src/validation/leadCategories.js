@@ -125,13 +125,26 @@ const contactBase = z.object({
  * Validate a lead create/update payload. Returns `{ ok: true, data }` or
  * `{ ok: false, errors }` (array of { path, message }) for a 400 response.
  */
-export const validateLeadPayload = (body = {}) => {
+// Distributors reuse the lead shape but never enter the pipeline, so the
+// prospect-only metrics (estimated user count / existing rate) aren't captured
+// for them — see DISTRIBUTOR_REQUIREMENT_SCHEMAS below.
+const DISTRIBUTOR_REQUIREMENT_SCHEMAS = {
+  ...REQUIREMENT_SCHEMAS,
+  PIN_RATE: z.object({}).passthrough(),
+};
+
+/**
+ * `variant: 'distributor'` relaxes the requirement blob for fields the
+ * distributor form doesn't ask for.
+ */
+export const validateLeadPayload = (body = {}, { variant = 'lead' } = {}) => {
   const base = contactBase.safeParse(body);
   if (!base.success) {
     return { ok: false, errors: flatten(base.error) };
   }
 
-  const reqSchema = REQUIREMENT_SCHEMAS[base.data.category];
+  const schemas = variant === 'distributor' ? DISTRIBUTOR_REQUIREMENT_SCHEMAS : REQUIREMENT_SCHEMAS;
+  const reqSchema = schemas[base.data.category];
   const req = reqSchema.safeParse(body.requirementDetails ?? {});
   if (!req.success) {
     return { ok: false, errors: flatten(req.error, 'requirementDetails') };
