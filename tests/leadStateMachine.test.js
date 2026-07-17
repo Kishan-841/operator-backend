@@ -1119,3 +1119,86 @@ test('completeSoftware on a non-ISP lead needs no managedBy — software-managed
   assert.equal(updated.portalUsername, 'pinco');
   assert.equal(updated.status, 'NOC_L3_PENDING');
 });
+
+// ── NOC send-back: each NOC stage returns a lead one fixed step back ──────────
+test('sendBack from NOC L2 returns the lead to delivery for re-installation', async () => {
+  const lead = await createLead({ status: 'NOC_L2_PENDING' });
+  const updated = await sm.sendBack({
+    leadId: lead.id,
+    actor: actor('NOC_L2_USER'),
+    reason: 'Fiber not terminated at the rack',
+  });
+  assert.equal(updated.status, 'DISPATCHED');
+  const notes = await prisma.leadNote.findMany({ where: { leadId: lead.id, stage: 'NOC_L2' } });
+  assert.equal(notes.length, 1);
+  assert.equal(notes[0].body, 'Sent back: Fiber not terminated at the rack');
+});
+
+test('sendBack from NOC L3 returns the lead to software', async () => {
+  const lead = await createLead({ status: 'NOC_L3_PENDING', category: 'PIN_RATE' });
+  const updated = await sm.sendBack({
+    leadId: lead.id,
+    actor: actor('NOC_L3_USER'),
+    reason: 'Portal username does not match the CAF',
+  });
+  assert.equal(updated.status, 'SOFTWARE_PENDING');
+});
+
+test('sendBack from the L3→L2 handoff returns the lead to NOC L3 and keeps the IP allocation', async () => {
+  const alloc = { BNG: [{ mikrotikIp: '10.0.0.1', mikrotikIdentity: 'bng-1', loopbackIp: '1.1.1.1', vsi: 'VSI-1', vlan: '100' }] };
+  const lead = await createLead({
+    status: 'L3_TO_L2_HANDOFF',
+    category: 'PIN_RATE',
+    ipAllocation: alloc,
+  });
+  const updated = await sm.sendBack({
+    leadId: lead.id,
+    actor: actor('NOC_L2_USER'),
+    reason: 'VLAN 100 clashes with an existing customer',
+  });
+  assert.equal(updated.status, 'NOC_L3_PENDING');
+  // L3 edits the wrong field rather than retyping every config.
+  assert.deepEqual(updated.ipAllocation, alloc);
+});
+
+test('sendBack requires a reason', async () => {
+  const lead = await createLead({ status: 'NOC_L2_PENDING' });
+  await rejectsWithStatus(
+    () => sm.sendBack({ leadId: lead.id, actor: actor('NOC_L2_USER'), reason: '   ' }),
+    400,
+  );
+});
+
+test('sendBack from a non-NOC stage throws 409', async () => {
+  const lead = await createLead({ status: 'PRICING_PENDING' });
+  await rejectsWithStatus(
+    () => sm.sendBack({ leadId: lead.id, actor: actor('NOC_L2_USER'), reason: 'nope' }),
+    409,
+  );
+});
+
+test('sendBack by the wrong NOC role throws 403', async () => {
+  const lead = await createLead({ status: 'NOC_L2_PENDING' });
+  await rejectsWithStatus(
+    () => sm.sendBack({ leadId: lead.id, actor: actor('NOC_L3_USER'), reason: 'not my stage' }),
+    403,
+  );
+});
+
+test('sendBack lets an admin act on any NOC stage', async () => {
+  const lead = await createLead({ status: 'NOC_L2_PENDING' });
+  const updated = await sm.sendBack({
+    leadId: lead.id,
+    actor: actor('SUPER_ADMIN'),
+    reason: 'admin override',
+  });
+  assert.equal(updated.status, 'DISPATCHED');
+});
+
+test('a sent-back lead returns to its NOC queue through the normal forward path', async () => {
+  const lead = await createLead({ status: 'NOC_L2_PENDING' });
+  await sm.sendBack({ leadId: lead.id, actor: actor('NOC_L2_USER'), reason: 'redo the splice' });
+  assert.equal(await status(lead.id), 'DISPATCHED');
+  const updated = await sm.completeInstallation({ leadId: lead.id, actor: actor('DELIVERY_USER'), notes: 'respliced' });
+  assert.equal(updated.status, 'NOC_L2_PENDING');
+});

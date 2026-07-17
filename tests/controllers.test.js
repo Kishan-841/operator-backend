@@ -54,6 +54,7 @@ before(async () => {
   tokens.sales = await login('SALES_USER');
   tokens.feasibility = await login('FEASIBILITY_USER');
   tokens.nocL2 = await login('NOC_L2_USER');
+  tokens.nocL3 = await login('NOC_L3_USER');
   tokens.software = await login('SOFTWARE_USER');
 });
 
@@ -1004,4 +1005,43 @@ test('GET /api/leads/aggregator-options returns builtins + custom master rows', 
 
   const unauth = await request('GET', '/api/leads/aggregator-options');
   assert.equal(unauth.status, 401);
+});
+
+// ── POST /api/leads/:id/send-back ─────────────────────────────────────────────
+test('POST /api/leads/:id/send-back (NOC L2) → 200 and the lead returns to delivery', async () => {
+  const lead = await createLead({ status: 'NOC_L2_PENDING' });
+  const r = await request('POST', `/api/leads/${lead.id}/send-back`, {
+    token: tokens.nocL2,
+    body: { reason: 'Fiber not terminated' },
+  });
+  assert.equal(r.status, 200);
+  assert.equal(r.body.data.status, 'DISPATCHED');
+});
+
+test('POST /api/leads/:id/send-back without a reason → 400', async () => {
+  const lead = await createLead({ status: 'NOC_L2_PENDING' });
+  const r = await request('POST', `/api/leads/${lead.id}/send-back`, {
+    token: tokens.nocL2,
+    body: {},
+  });
+  assert.equal(r.status, 400);
+});
+
+test('POST /api/leads/:id/send-back is forbidden for a non-NOC role → 403', async () => {
+  const lead = await createLead({ status: 'NOC_L2_PENDING' });
+  const r = await request('POST', `/api/leads/${lead.id}/send-back`, {
+    token: tokens.sales,
+    body: { reason: 'not mine' },
+  });
+  assert.equal(r.status, 403);
+});
+
+test('POST /api/leads/:id/send-back (NOC L3) → 200 and the lead returns to software', async () => {
+  const lead = await createLead({ status: 'NOC_L3_PENDING', category: 'PIN_RATE' });
+  const r = await request('POST', `/api/leads/${lead.id}/send-back`, {
+    token: tokens.nocL3,
+    body: { reason: 'Portal username wrong' },
+  });
+  assert.equal(r.status, 200);
+  assert.equal(r.body.data.status, 'SOFTWARE_PENDING');
 });

@@ -291,6 +291,20 @@ export const completeNocL2 = async (req, res) => {
   }
 };
 
+/** POST /api/leads/:id/send-back (NOC L2 / NOC L3) { reason } — return the lead one stage back. */
+export const sendBack = async (req, res) => {
+  try {
+    const data = await sm.sendBack({
+      leadId: req.params.id,
+      actor: actorFromReq(req),
+      reason: asText(req.body?.reason),
+    });
+    return res.json({ message: 'Lead sent back.', data });
+  } catch (error) {
+    return fail(res, error);
+  }
+};
+
 /** POST /api/leads/:id/aggregator (SALES) { aggregatorTypes: string[], remark? } (legacy single aggregatorType accepted) */
 export const confirmAggregator = async (req, res) => {
   try {

@@ -48,6 +48,7 @@ import {
   completeNocL3,
   completeL3ToL2,
   assignL3ToL2,
+  sendBack,
   completeClientHandover,
   markAgreementSentForSignature,
   verifyAgreement,
@@ -136,6 +137,9 @@ router.post('/:id/software', requireRole('SOFTWARE_USER'), completeSoftware);
 router.post('/:id/noc-l3', requireRole('NOC_L3_USER'), completeNocL3);
 router.post('/:id/l3-to-l2', requireRole('NOC_L2_USER', 'NOC_L3_USER'), completeL3ToL2);
 router.post('/:id/l3-to-l2/assign', requireRole('NOC_L3_USER'), assignL3ToL2);
+// Send-back is gated per-stage inside the state machine — an L3 user can't
+// bounce an L2-owned stage — so the route only has to keep non-NOC roles out.
+router.post('/:id/send-back', requireRole('NOC_L2_USER', 'NOC_L3_USER'), sendBack);
 router.post(
   '/:id/agreement/generate',
   requireRole('SOFTWARE_USER', 'SALES_USER'),

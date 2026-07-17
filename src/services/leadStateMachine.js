@@ -982,6 +982,58 @@ export const completeNocL3 = async ({ leadId, actor, ipAllocation }) => {
   });
 };
 
+// NOC send-back: a lead can arrive in a NOC queue un-workable through no fault
+// of the NOC team — the install was never finished, the portal is wrong, the
+// handoff carries a bad config. Each NOC stage returns the lead exactly one
+// step back, to the team that owns the problem. The routing table IS the
+// feature: a status that isn't a key here cannot be sent back at all, which is
+// what keeps this from becoming a general-purpose "move to any stage" hole.
+//
+// No new forward edges are needed — the normal forward transition from each
+// target already leads back into the NOC queue it came from.
+const SEND_BACK_ROUTES = {
+  NOC_L2_PENDING: { to: 'DISPATCHED', sender: 'NOC_L2_USER', notifyRole: 'DELIVERY_USER', noteStage: 'NOC_L2' },
+  NOC_L3_PENDING: { to: 'SOFTWARE_PENDING', sender: 'NOC_L3_USER', notifyRole: 'SOFTWARE_USER', noteStage: 'NOC_L3' },
+  L3_TO_L2_HANDOFF: { to: 'NOC_L3_PENDING', sender: 'NOC_L2_USER', notifyRole: 'NOC_L3_USER', noteStage: 'L3_TO_L2' },
+};
+
+export const sendBack = async ({ leadId, actor, reason }) => {
+  const lead = await loadLead(leadId);
+  const route = SEND_BACK_ROUTES[lead.status];
+  // Stage check first so a stale tab gets the conventional 409 rather than a
+  // confusing 403 for a lead that has already moved on.
+  if (!route) {
+    throw httpError(409, 'This lead is not currently in a NOC stage. Refresh to see where it is now.');
+  }
+  if (!ADMIN_ROLES.includes(actor.role) && actor.role !== route.sender) {
+    throw httpError(403, 'Only the NOC team that owns this stage can send the lead back.');
+  }
+  const text = String(reason ?? '').trim();
+  if (!text) {
+    throw httpError(400, 'A reason is required to send a lead back.');
+  }
+
+  const updated = await applyTransition(leadId, lead.status, { status: route.to });
+
+  await addLeadNote({ leadId, stage: route.noteStage, body: `Sent back: ${text}`, actor });
+  await logStatusChange({
+    entityType: 'Lead',
+    entityId: leadId,
+    oldValue: lead.status,
+    newValue: route.to,
+    actor,
+    reason: `Sent back: ${text}`,
+  });
+  await notifyRoles([route.notifyRole], {
+    type: 'STAGE_TRANSITION',
+    title: `${lead.leadNumber} sent back — needs rework`,
+    message: text,
+    leadId,
+  });
+  await refreshSidebarForRoles([route.sender, route.notifyRole, ...ADMIN_ROLES]);
+  return updated;
+};
+
 // Stage 13 routing: NOC L3 assigns (or reassigns) the handoff to a specific NOC
 // L2 user. Not a status transition — the lead stays at L3_TO_L2_HANDOFF and can
 // be reassigned any time.
