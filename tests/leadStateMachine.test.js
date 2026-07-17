@@ -771,6 +771,35 @@ test('completeNocL3: MIKROTIK is optional when BNG is also selected', async () =
   assert.deepEqual(Object.keys(updated.ipAllocation), ['BNG']);
 });
 
+test('BIRAS is a built-in with BNG’s field set and also makes MIKROTIK optional', async () => {
+  const lead = await createLead({ status: 'AGGREGATOR_CONFIRM_PENDING', category: 'PIN_RATE', requirementDetails: {} });
+  const confirmed = await sm.confirmAggregator({
+    leadId: lead.id,
+    actor: actor('SALES_USER'),
+    selections: [{ type: 'BIRAS', quantity: 1 }, { type: 'MIKROTIK', quantity: 1 }],
+  });
+  assert.equal(confirmed.status, 'SOFTWARE_PENDING');
+  // Built-in → never registered in the custom AggregatorType master.
+  assert.equal(await prisma.aggregatorType.count({ where: { name: 'BIRAS' } }), 0);
+
+  await prisma.lead.update({ where: { id: lead.id }, data: { status: 'NOC_L3_PENDING' } });
+  // Same required keys as BNG — an incomplete BIRAS unit is rejected.
+  await rejectsWithStatus(
+    () => sm.completeNocL3({
+      leadId: lead.id, actor: actor('NOC_L3_USER'),
+      ipAllocation: { BIRAS: [{ mikrotikIp: '10.0.0.2', mikrotikIdentity: 'MK-1', loopbackIp: '10.255.0.1', vsi: 'VSI-1' }] },
+    }),
+    400, // missing vlan
+  );
+  // Complete BIRAS alone → advances, MIKROTIK bypassed like it is with BNG.
+  const biras = { mikrotikIp: '10.0.0.2', mikrotikIdentity: 'MK-1', loopbackIp: '10.255.0.1', vsi: 'VSI-1', vlan: '100' };
+  const updated = await sm.completeNocL3({
+    leadId: lead.id, actor: actor('NOC_L3_USER'), ipAllocation: { BIRAS: [biras] },
+  });
+  assert.equal(updated.status, 'L3_TO_L2_HANDOFF');
+  assert.deepEqual(Object.keys(updated.ipAllocation), ['BIRAS']);
+});
+
 test('completeNocL3: MIKROTIK alone stays fully mandatory', async () => {
   const lead = await createLead({
     status: 'NOC_L3_PENDING', category: 'PIN_RATE', requirementDetails: {},

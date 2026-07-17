@@ -999,7 +999,7 @@ test('GET /api/leads/aggregator-options returns builtins + custom master rows', 
   await prisma.aggregatorType.create({ data: { name: 'OLT', createdById: userId('SALES_USER') } });
   const r = await request('GET', '/api/leads/aggregator-options', { token: tokens.sales });
   assert.equal(r.status, 200);
-  assert.deepEqual(r.body.builtins, ['BNG', 'MIKROTIK', 'BGP']);
+  assert.deepEqual(r.body.builtins, ['BNG', 'BIRAS', 'MIKROTIK', 'BGP']);
   assert.deepEqual(r.body.custom, ['OLT']);
 
   const unauth = await request('GET', '/api/leads/aggregator-options');

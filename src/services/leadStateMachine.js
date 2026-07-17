@@ -7,7 +7,7 @@ import { assertLeadAccess } from '../utils/leadAccess.js';
 import { AGREEMENT_DOC_TYPE } from '../utils/documentTypes.js';
 import { missingRequiredDocs } from '../utils/docRequirements.js';
 import { generateDeliveryRequestNumber } from './leadNumber.service.js';
-import { KNOWN_AGGREGATORS, requiredKeysFor } from '../utils/nocL3Fields.js';
+import { KNOWN_AGGREGATORS, BNG_CLASS, requiredKeysFor } from '../utils/nocL3Fields.js';
 
 // Append to a delivery request's audit trail. Soft-fail — never break the flow.
 const logDeliveryRequest = async ({ deliveryRequestId, action, actor, details = null }) => {
@@ -948,9 +948,10 @@ export const completeNocL3 = async ({ leadId, actor, ipAllocation }) => {
     : (lead.aggregatorTypes?.length ? lead.aggregatorTypes : [lead.aggregatorType || 'MIKROTIK'])
         .map((type) => ({ type, quantity: 1 }));
   const alloc = ipAllocation && typeof ipAllocation === 'object' ? ipAllocation : {};
-  // When BNG is selected, MIKROTIK configs are optional — the BNG carries the
-  // aggregation. All-or-nothing: leave MIKROTIK fully out, or provide every unit.
-  const hasBng = selections.some((s) => s.type === 'BNG');
+  // When a BNG-class aggregator (BNG / BIRAS) is selected, MIKROTIK configs are
+  // optional — it carries the aggregation. All-or-nothing: leave MIKROTIK fully
+  // out, or provide every unit.
+  const hasBng = selections.some((s) => BNG_CLASS.includes(s.type));
   const stored = {};
   for (const { type, quantity } of selections) {
     const required = requiredKeysFor(type);
