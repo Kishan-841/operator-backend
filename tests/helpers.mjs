@@ -36,16 +36,31 @@ export async function seedUsers() {
   const password = await bcrypt.hash(TEST_PASSWORD, 10);
   for (const role of ROLES) {
     const email = `${role.toLowerCase()}@test.local`;
+    // Staff carry accesses=[role]; admins override so they keep [].
+    const accesses = ['SUPER_ADMIN', 'ADMIN'].includes(role) ? [] : [role];
     users[role] = await prisma.user.upsert({
       where: { email },
-      update: { password, role, name: role, isActive: true },
-      create: { name: role, email, password, role },
+      update: { password, role, accesses, name: role, isActive: true },
+      create: { name: role, email, password, role, accesses },
     });
   }
   return users;
 }
 
-export const actor = (role) => ({ id: users[role].id, role: users[role].role, label: users[role].email });
+export const actor = (role) => ({
+  id: users[role].id,
+  role: users[role].role,
+  accesses: users[role].accesses,
+  label: users[role].email,
+});
+
+/** Build a multi-access staff actor for tests (role = first access). */
+export const staffActor = (accesses, over = {}) => ({
+  id: over.id ?? users[accesses[0]].id,
+  role: accesses[0],
+  accesses,
+  label: over.label ?? 'multi@test.local',
+});
 export const userId = (role) => users[role].id;
 
 let seq = 0;

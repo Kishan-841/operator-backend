@@ -33,14 +33,16 @@ async function main() {
       user = await prisma.user.findFirst({ where: { role: u.role }, orderBy: { createdAt: 'asc' } });
     }
 
+    // Staff carry accesses=[role]; admins override and keep [] (multi-access-users).
+    const accesses = ['SUPER_ADMIN', 'ADMIN'].includes(u.role) ? [] : [u.role];
     if (user) {
       await prisma.user.update({
         where: { id: user.id },
-        data: { email, name: u.name, role: u.role, password, isActive: true },
+        data: { email, name: u.name, role: u.role, accesses, password, isActive: true },
       });
     } else {
       await prisma.user.create({
-        data: { email, name: u.name, role: u.role, password, isActive: true },
+        data: { email, name: u.name, role: u.role, accesses, password, isActive: true },
       });
     }
   }

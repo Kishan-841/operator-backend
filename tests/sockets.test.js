@@ -135,7 +135,7 @@ test('a transition pushes a notification to the receiving role and refreshes eve
 
   await sm.submitForFeasibility({
     leadId: lead.id,
-    actor: { id: users.SALES_USER.id, role: 'SALES_USER', label: 'sales' },
+    actor: { id: users.SALES_USER.id, role: 'SALES_USER', accesses: users.SALES_USER.accesses, label: 'sales' },
   });
 
   const n = await feasNotif;

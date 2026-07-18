@@ -8,6 +8,9 @@
 export const actorFromReq = (req, extra = {}) => ({
   id: req.user?.id ?? null,
   role: req.user?.role ?? null,
+  // Authorization (hasAccess / assertLeadAccess) reads the access set, so the
+  // actor must carry it, not just the singular primary role.
+  accesses: req.user?.accesses ?? [],
   email: req.user?.email ?? null,
   label: req.user?.email ?? null,
   ip: req.ip || req.socket?.remoteAddress || null,

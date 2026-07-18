@@ -6,16 +6,19 @@ import { ROLE_NOTE_STAGES } from '../utils/leadVisibility.js';
 
 const leadSelect = { lead: { select: { id: true, leadNumber: true, organizationName: true } } };
 
-// Lead-ownership filter for the notes views: sales users are scoped to leads
-// they own; admins and stage-based roles (NOC, delivery, …) see everything.
+// Lead-ownership filter for the notes views: users with sales access are scoped
+// to leads they own; admins and stage-based accesses (NOC, delivery, …) see all.
 const salesLeadScope = (user) =>
-  !isAdmin(user) && user?.role === 'SALES_USER' ? { assignedSalesId: user.id } : null;
+  !isAdmin(user) && (user?.accesses ?? []).includes('SALES_USER') ? { assignedSalesId: user.id } : null;
 
-// Stage roles read only the timeline stages relevant to their work (a pricing
-// note shouldn't surface to the store user). Sales owners + admins see all.
+// Stage accesses read only the timeline stages relevant to their work (a pricing
+// note shouldn't surface to the store user). Sales owners + admins see all; a
+// multi-access user sees the union of every stage their accesses cover.
 const noteStageScope = (user) => {
-  if (isAdmin(user) || user?.role === 'SALES_USER') return null;
-  return { stage: { in: ROLE_NOTE_STAGES[user?.role] ?? [] } };
+  const accesses = user?.accesses ?? [];
+  if (isAdmin(user) || accesses.includes('SALES_USER')) return null;
+  const stages = [...new Set(accesses.flatMap((a) => ROLE_NOTE_STAGES[a] ?? []))];
+  return { stage: { in: stages } };
 };
 
 /** GET /api/leads/:id/notes — chronological note timeline for one lead. */

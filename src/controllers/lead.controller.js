@@ -38,10 +38,10 @@ const resolveOwnerId = async (req, fallbackId) => {
   if (!isAdmin(req.user) || typeof rawId !== 'string' || !rawId.trim()) return fallbackId;
   const target = await prisma.user.findUnique({
     where: { id: rawId.trim() },
-    select: { id: true, role: true, isActive: true },
+    select: { id: true, accesses: true, isActive: true },
   });
-  // Valid owners: an active sales user, or the acting admin themselves ("Me").
-  if (!target || !target.isActive || (target.role !== 'SALES_USER' && target.id !== req.user.id)) {
+  // Valid owners: an active user holding sales access, or the acting admin ("Me").
+  if (!target || !target.isActive || (!target.accesses.includes('SALES_USER') && target.id !== req.user.id)) {
     const err = new Error('Pick an active sales user as the lead owner.');
     err.status = 400;
     throw err;

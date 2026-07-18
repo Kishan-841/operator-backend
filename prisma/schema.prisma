@@ -117,7 +117,11 @@ model User {
   name      String
   email     String   @unique
   password  String // bcrypt hash
-  role      Role
+  role      Role // primary identity: admin type, or a staff user's first-granted access
+  // Stage accesses a staff user was granted (multi-access-users). Authorization
+  // for staff flows through this set; admins override and carry []. `role` mirrors
+  // accesses[0] for staff as a label/JWT/back-compat value, never for auth.
+  accesses  Role[]   @default([])
   isActive  Boolean  @default(true)
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt

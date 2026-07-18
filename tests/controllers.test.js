@@ -1045,3 +1045,101 @@ test('POST /api/leads/:id/send-back (NOC L3) → 200 and the lead returns to sof
   assert.equal(r.status, 200);
   assert.equal(r.body.data.status, 'SOFTWARE_PENDING');
 });
+
+// ── Multi-access staff: one login, several stage accesses ────────────────────
+import bcryptForAccess from 'bcryptjs';
+
+const makeStaff = async (accesses) => {
+  const password = await bcryptForAccess.hash(TEST_PASSWORD, 10);
+  const email = `multi-${accesses.join('-').toLowerCase()}@test.local`;
+  await prisma.user.upsert({
+    where: { email },
+    update: { password, role: accesses[0], accesses, isActive: true },
+    create: { name: 'Multi', email, password, role: accesses[0], accesses },
+  });
+  const r = await request('POST', '/api/auth/login', { body: { email, password: TEST_PASSWORD } });
+  return r.body?.token;
+};
+
+test('a Sales+Feasibility staff user passes both gated queues', async () => {
+  const token = await makeStaff(['SALES_USER', 'FEASIBILITY_USER']);
+  const sales = await request('GET', '/api/leads/pricing/queue', { token });
+  const feas = await request('GET', '/api/leads/feasibility/queue', { token });
+  assert.equal(sales.status, 200);
+  assert.equal(feas.status, 200);
+});
+
+test('a Sales+Feasibility staff user is blocked from a NOC L2 queue → 403', async () => {
+  const token = await makeStaff(['SALES_USER', 'FEASIBILITY_USER']);
+  const noc = await request('GET', '/api/leads/nocl2/queue', { token });
+  assert.equal(noc.status, 403);
+});
+
+test('sidebar counts scope sales-owned queues to the user but show all of their other stages', async () => {
+  const token = await makeStaff(['SALES_USER', 'FEASIBILITY_USER']);
+  // A feasibility-pending lead owned by someone else — visible via feasibility access.
+  await createLead({ status: 'FEASIBILITY_PENDING', assignedSalesId: userId('SALES_USER') });
+  // A pricing lead owned by another sales user — must NOT count for this user.
+  await createLead({ status: 'PRICING_PENDING', assignedSalesId: userId('SALES_USER') });
+  const r = await request('GET', '/api/leads/sidebar-counts', { token });
+  assert.equal(r.status, 200);
+  assert.ok(r.body.counts.feasibilityPending >= 1, 'sees all feasibility-pending');
+  assert.equal(r.body.counts.pricingPending, 0, 'sees only own sales-owned leads');
+});
+
+// ── User create/update with accesses ─────────────────────────────────────────
+test('creating a staff user with several accesses stores them and sets role=accesses[0]', async () => {
+  const r = await request('POST', '/api/users', {
+    token: tokens.admin,
+    body: { name: 'Multi Staff', email: `staff-${Date.now()}@test.local`, password: 'secret1',
+            role: 'SALES_USER', accesses: ['SALES_USER', 'FEASIBILITY_USER'] },
+  });
+  assert.equal(r.status, 201);
+  assert.deepEqual(r.body.data.accesses, ['SALES_USER', 'FEASIBILITY_USER']);
+  assert.equal(r.body.data.role, 'SALES_USER');
+});
+
+test('creating a staff user with an empty accesses array → 400', async () => {
+  const r = await request('POST', '/api/users', {
+    token: tokens.admin,
+    body: { name: 'No Access', email: `noacc-${Date.now()}@test.local`, password: 'secret1',
+            role: 'SALES_USER', accesses: [] },
+  });
+  assert.equal(r.status, 400);
+});
+
+test('creating an admin ignores any submitted accesses and stores []', async () => {
+  const r = await request('POST', '/api/users', {
+    token: tokens.admin,
+    body: { name: 'An Admin', email: `adm-${Date.now()}@test.local`, password: 'secret1',
+            role: 'ADMIN', accesses: ['SALES_USER'] },
+  });
+  assert.equal(r.status, 201);
+  assert.deepEqual(r.body.data.accesses, []);
+  assert.equal(r.body.data.role, 'ADMIN');
+});
+
+test('editing a staff user rewrites the access set and keeps role=accesses[0]', async () => {
+  const created = await request('POST', '/api/users', {
+    token: tokens.admin,
+    body: { name: 'Editable', email: `edit-${Date.now()}@test.local`, password: 'secret1',
+            role: 'SALES_USER', accesses: ['SALES_USER'] },
+  });
+  const id = created.body.data.id;
+  const r = await request('PUT', `/api/users/${id}`, {
+    token: tokens.admin,
+    body: { accesses: ['FEASIBILITY_USER', 'STORE_USER'] },
+  });
+  assert.equal(r.status, 200);
+  assert.deepEqual(r.body.data.accesses, ['FEASIBILITY_USER', 'STORE_USER']);
+  assert.equal(r.body.data.role, 'FEASIBILITY_USER');
+});
+
+test('creating a staff user with only a role (no accesses) falls back to [role]', async () => {
+  const r = await request('POST', '/api/users', {
+    token: tokens.admin,
+    body: { name: 'Legacy', email: `legacy-${Date.now()}@test.local`, password: 'secret1', role: 'STORE_USER' },
+  });
+  assert.equal(r.status, 201);
+  assert.deepEqual(r.body.data.accesses, ['STORE_USER']);
+});

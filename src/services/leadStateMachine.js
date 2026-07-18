@@ -4,6 +4,7 @@ import { logStatusChange } from './statusChangeLog.service.js';
 import { addLeadNote } from './leadNote.service.js';
 import { notifyRoles, notifyOneUser, refreshSidebarForRoles } from './notification.service.js';
 import { assertLeadAccess } from '../utils/leadAccess.js';
+import { hasAccess } from '../utils/roleHelper.js';
 import { AGREEMENT_DOC_TYPE } from '../utils/documentTypes.js';
 import { missingRequiredDocs } from '../utils/docRequirements.js';
 import { generateDeliveryRequestNumber } from './leadNumber.service.js';
@@ -1005,7 +1006,8 @@ export const sendBack = async ({ leadId, actor, reason }) => {
   if (!route) {
     throw httpError(409, 'This lead is not currently in a NOC stage. Refresh to see where it is now.');
   }
-  if (!ADMIN_ROLES.includes(actor.role) && actor.role !== route.sender) {
+  // Actor check: admin, or a staff user holding the sending stage's access.
+  if (!hasAccess(actor, route.sender)) {
     throw httpError(403, 'Only the NOC team that owns this stage can send the lead back.');
   }
   const text = String(reason ?? '').trim();
@@ -1044,9 +1046,11 @@ export const assignL3ToL2 = async ({ leadId, actor, assignedToId, notes }) => {
   }
   const assignee = await prisma.user.findUnique({
     where: { id: assignedToId },
-    select: { id: true, name: true, role: true, isActive: true },
+    select: { id: true, name: true, role: true, accesses: true, isActive: true },
   });
-  if (!assignee || !assignee.isActive || assignee.role !== 'NOC_L2_USER') {
+  // Target check: the assignee must genuinely hold NOC L2 access. No admin
+  // override — an admin isn't an assignable L2 technician (unchanged behaviour).
+  if (!assignee || !assignee.isActive || !assignee.accesses.includes('NOC_L2_USER')) {
     throw httpError(400, 'Select an active NOC L2 user to assign.');
   }
 

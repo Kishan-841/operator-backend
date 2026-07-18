@@ -1,6 +1,6 @@
 import jwt from 'jsonwebtoken';
 import prisma from '../config/db.js';
-import { isAdmin } from '../utils/roleHelper.js';
+import { hasAnyRole } from '../utils/roleHelper.js';
 
 /**
  * Authenticate via Bearer JWT. Loads the current user from the DB on every
@@ -20,7 +20,7 @@ export const auth = async (req, res, next) => {
 
     const user = await prisma.user.findUnique({
       where: { id: decoded.userId },
-      select: { id: true, email: true, name: true, role: true, isActive: true },
+      select: { id: true, email: true, name: true, role: true, accesses: true, isActive: true },
     });
 
     if (!user) {
@@ -45,8 +45,8 @@ export const requireRole = (...roles) => (req, res, next) => {
   if (!req.user) {
     return res.status(401).json({ message: 'Authentication required.' });
   }
-  if (isAdmin(req.user)) return next();
-  if (!roles.includes(req.user.role)) {
+  // hasAnyRole admits admins and any staff user whose access set intersects.
+  if (!hasAnyRole(req.user, roles)) {
     return res.status(403).json({ message: 'Access denied. Insufficient permissions.' });
   }
   return next();

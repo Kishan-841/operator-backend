@@ -16,6 +16,7 @@ import {
   status,
   cleanup,
   rejectsWithStatus,
+  staffActor,
 } from './helpers.mjs';
 
 before(async () => {
@@ -1201,4 +1202,33 @@ test('a sent-back lead returns to its NOC queue through the normal forward path'
   assert.equal(await status(lead.id), 'DISPATCHED');
   const updated = await sm.completeInstallation({ leadId: lead.id, actor: actor('DELIVERY_USER'), notes: 'respliced' });
   assert.equal(updated.status, 'NOC_L2_PENDING');
+});
+
+// ── Multi-access: a NOC L2+L3 staff user can send back from either NOC stage ──
+test('a NOC L2+L3 staff user can send back from the L2 stage', async () => {
+  const lead = await createLead({ status: 'NOC_L2_PENDING' });
+  const updated = await sm.sendBack({
+    leadId: lead.id,
+    actor: staffActor(['NOC_L2_USER', 'NOC_L3_USER']),
+    reason: 'splice redo',
+  });
+  assert.equal(updated.status, 'DISPATCHED');
+});
+
+test('a NOC L2+L3 staff user can send back from the L3 stage', async () => {
+  const lead = await createLead({ status: 'NOC_L3_PENDING', category: 'PIN_RATE' });
+  const updated = await sm.sendBack({
+    leadId: lead.id,
+    actor: staffActor(['NOC_L2_USER', 'NOC_L3_USER']),
+    reason: 'wrong pool',
+  });
+  assert.equal(updated.status, 'SOFTWARE_PENDING');
+});
+
+test('a Sales-only staff user cannot send back a NOC stage → 403', async () => {
+  const lead = await createLead({ status: 'NOC_L2_PENDING' });
+  await rejectsWithStatus(
+    () => sm.sendBack({ leadId: lead.id, actor: staffActor(['SALES_USER']), reason: 'nope' }),
+    403,
+  );
 });

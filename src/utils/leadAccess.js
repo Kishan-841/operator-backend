@@ -1,4 +1,4 @@
-import { isAdmin } from './roleHelper.js';
+import { isAdmin, hasAccess } from './roleHelper.js';
 
 /**
  * Lead-level access control (object-level authorization).
@@ -19,13 +19,18 @@ export const ROLE_STATUSES = {
   SOFTWARE_USER: ['DOCS_UPLOADED', 'SOFTWARE_PENDING', 'AGREEMENT_PENDING', 'AGREEMENT_SENT_FOR_SIGNATURE'],
 };
 
-/** Can `user` see/act on `lead`? `lead` must carry `assignedSalesId` + `status`. */
+/**
+ * Can `user` see/act on `lead`? `lead` must carry `assignedSalesId` + `status`.
+ * A staff user's reach is the UNION of their accesses: sales access grants their
+ * own leads; each stage access grants leads currently at one of that stage's
+ * statuses. Holding any one qualifying access is enough.
+ */
 export const canAccessLead = (user, lead) => {
   if (!user || !lead) return false;
   if (isAdmin(user)) return true;
-  if (user.role === 'SALES_USER') return lead.assignedSalesId === user.id;
-  const statuses = ROLE_STATUSES[user.role];
-  return Array.isArray(statuses) && statuses.includes(lead.status);
+  const accesses = user.accesses ?? [];
+  if (accesses.includes('SALES_USER') && lead.assignedSalesId === user.id) return true;
+  return accesses.some((a) => (ROLE_STATUSES[a] ?? []).includes(lead.status));
 };
 
 /** Throw a 404 (never reveal existence) when access is denied. */
@@ -43,4 +48,4 @@ export const assertLeadAccess = (user, lead) => {
  * so it's safe to merge into any lead list/count query unconditionally.
  */
 export const salesOwnerScope = (user) =>
-  !isAdmin(user) && user?.role === 'SALES_USER' ? { assignedSalesId: user.id } : {};
+  !isAdmin(user) && (user?.accesses ?? []).includes('SALES_USER') ? { assignedSalesId: user.id } : {};

@@ -9,15 +9,36 @@ const { Role } = prismaPkg;
 const VALID_ROLES = Object.values(Role);
 const ADMIN_ROLES = [Role.SUPER_ADMIN, Role.ADMIN];
 
+const STAFF_ROLES = VALID_ROLES.filter((r) => !ADMIN_ROLES.includes(r));
+
 // Never expose the password hash.
 const publicSelect = {
   id: true,
   name: true,
   email: true,
   role: true,
+  accesses: true,
   isActive: true,
   createdAt: true,
   updatedAt: true,
+};
+
+/**
+ * Resolve the account's { role, accesses } from a request body.
+ *  - Admin account types carry an empty access set (the admin override covers all).
+ *  - Staff carry a non-empty set of stage accesses; `role` mirrors accesses[0] as
+ *    a label. A body sending only a staff `role` (no grid, e.g. the seed script)
+ *    falls back to [role] for backward compatibility.
+ * Returns { error } (a 400 message) when a staff account resolves to no accesses.
+ */
+const resolveAccessGrant = (role, accesses) => {
+  if (ADMIN_ROLES.includes(role)) return { role, accesses: [] };
+  const submitted = Array.isArray(accesses) ? accesses.filter((a) => STAFF_ROLES.includes(a)) : null;
+  const resolved = submitted && submitted.length
+    ? [...new Set(submitted)]
+    : (Array.isArray(accesses) ? [] : (STAFF_ROLES.includes(role) ? [role] : []));
+  if (!resolved.length) return { error: 'Grant the staff user at least one access.' };
+  return { role: resolved[0], accesses: resolved };
 };
 
 /** GET /api/users — search (name/email) + role filter + pagination. */
@@ -27,7 +48,9 @@ export const getUsers = async (req, res) => {
     const term = search ? String(search).trim() : '';
 
     const where = {
-      ...(role && VALID_ROLES.includes(role) ? { role } : {}),
+      // Filter by ACCESS, not the singular primary role, so the role filter finds
+      // every staff user granted that access (multi-access-users).
+      ...(role && VALID_ROLES.includes(role) ? { accesses: { has: role } } : {}),
       ...(term
         ? {
             OR: [
@@ -63,11 +86,13 @@ export const getUsersByRole = async (req, res) => {
     const { role } = req.query;
     const where = {
       isActive: true,
-      ...(role && VALID_ROLES.includes(role) ? { role } : {}),
+      // Assignment dropdowns match on ACCESS: a staff user whose primary role
+      // differs but who holds this access must still be pickable.
+      ...(role && VALID_ROLES.includes(role) ? { accesses: { has: role } } : {}),
     };
     const items = await prisma.user.findMany({
       where,
-      select: { id: true, name: true, role: true },
+      select: { id: true, name: true, role: true, accesses: true },
       orderBy: { name: 'asc' },
     });
     return res.json({ items });
@@ -110,6 +135,11 @@ export const createUser = async (req, res) => {
       return res.status(400).json({ message: 'Password must be at least 6 characters.' });
     }
 
+    const grant = resolveAccessGrant(role, req.body?.accesses);
+    if (grant.error) {
+      return res.status(400).json({ message: grant.error });
+    }
+
     const normalizedEmail = email.toLowerCase().trim();
     const existing = await prisma.user.findUnique({
       where: { email: normalizedEmail },
@@ -124,7 +154,8 @@ export const createUser = async (req, res) => {
         name: name.trim(),
         email: normalizedEmail,
         password: await bcrypt.hash(password, 10),
-        role,
+        role: grant.role,
+        accesses: grant.accesses,
       },
       select: publicSelect,
     });
@@ -155,12 +186,21 @@ export const updateUser = async (req, res) => {
     });
     if (!target) return res.status(404).json({ message: 'User not found.' });
 
-    // Self-lockout guard: can't strip your own admin role.
-    if (id === req.user.id && role && !ADMIN_ROLES.includes(role)) {
-      return res.status(400).json({ message: 'You cannot remove your own admin role.' });
-    }
     if (role && !VALID_ROLES.includes(role)) {
       return res.status(400).json({ message: 'Invalid role.' });
+    }
+
+    // Recompute the access grant whenever the account type or the grid changes.
+    // The effective role is the submitted one, or the target's current role.
+    const changingGrant = role !== undefined || req.body?.accesses !== undefined;
+    let grant = null;
+    if (changingGrant) {
+      grant = resolveAccessGrant(role ?? target.role, req.body?.accesses);
+      if (grant.error) return res.status(400).json({ message: grant.error });
+      // Self-lockout guard: can't demote your own admin account to staff.
+      if (id === req.user.id && !ADMIN_ROLES.includes(grant.role)) {
+        return res.status(400).json({ message: 'You cannot remove your own admin role.' });
+      }
     }
 
     if ((name != null && typeof name !== 'string') ||
@@ -170,7 +210,10 @@ export const updateUser = async (req, res) => {
     }
     const data = {};
     if (name) data.name = name.trim();
-    if (role) data.role = role;
+    if (grant) {
+      data.role = grant.role;
+      data.accesses = grant.accesses;
+    }
     if (email) {
       const normalizedEmail = email.toLowerCase().trim();
       const clash = await prisma.user.findFirst({
