@@ -89,3 +89,51 @@ export const me = async (req, res) => {
 export const logout = async (_req, res) => {
   return res.json({ message: 'Logged out.' });
 };
+
+/**
+ * POST /api/auth/change-password — the signed-in user changes their own
+ * password by proving the current one. Any authenticated user; not admin-gated.
+ */
+export const changePassword = async (req, res) => {
+  try {
+    const { currentPassword, newPassword } = req.body || {};
+    if (typeof currentPassword !== 'string' || typeof newPassword !== 'string' || !currentPassword || !newPassword) {
+      return res.status(400).json({ message: 'Current and new passwords are required.' });
+    }
+    if (newPassword.length < 6) {
+      return res.status(400).json({ message: 'New password must be at least 6 characters.' });
+    }
+    if (newPassword === currentPassword) {
+      return res.status(400).json({ message: 'New password must be different from the current one.' });
+    }
+
+    // The auth middleware deliberately doesn't select the hash — fetch it here.
+    const user = await prisma.user.findUnique({
+      where: { id: req.user.id },
+      select: { id: true, email: true, password: true },
+    });
+    if (!user) return res.status(401).json({ message: 'User not found.' });
+
+    const matches = await bcrypt.compare(currentPassword, user.password);
+    if (!matches) {
+      return res.status(400).json({ message: 'Current password is incorrect.' });
+    }
+
+    await prisma.user.update({
+      where: { id: user.id },
+      data: { password: await bcrypt.hash(newPassword, 10) },
+    });
+
+    await logEvent({
+      action: 'PASSWORD_CHANGED',
+      entityType: 'User',
+      entityId: user.id,
+      summary: 'Changed own password',
+      actor: actorFromReq(req),
+    });
+    return res.json({ message: 'Password changed.' });
+  } catch (error) {
+    console.error('[auth.changePassword]', error);
+    return res.status(500).json({ message: 'Failed to change password.' });
+  }
+};

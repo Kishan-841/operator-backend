@@ -1143,3 +1143,63 @@ test('creating a staff user with only a role (no accesses) falls back to [role]'
   assert.equal(r.status, 201);
   assert.deepEqual(r.body.data.accesses, ['STORE_USER']);
 });
+
+// ── POST /api/auth/change-password (self-service) ────────────────────────────
+const freshUser = async (accesses = ['SALES_USER']) => {
+  const password = await bcryptForAccess.hash(TEST_PASSWORD, 10);
+  const email = `chpw-${Date.now()}-${Math.round(process.hrtime()[1])}@test.local`;
+  await prisma.user.create({
+    data: { name: 'ChPw', email, password, role: accesses[0], accesses },
+  });
+  const r = await request('POST', '/api/auth/login', { body: { email, password: TEST_PASSWORD } });
+  return { token: r.body.token, email };
+};
+
+test('change-password with the correct current password → 200 and the new password logs in', async () => {
+  const { token, email } = await freshUser();
+  const r = await request('POST', '/api/auth/change-password', {
+    token,
+    body: { currentPassword: TEST_PASSWORD, newPassword: 'brandNew1' },
+  });
+  assert.equal(r.status, 200);
+  // The new password works…
+  const good = await request('POST', '/api/auth/login', { body: { email, password: 'brandNew1' } });
+  assert.equal(good.status, 200);
+  // …and the old one no longer does.
+  const bad = await request('POST', '/api/auth/login', { body: { email, password: TEST_PASSWORD } });
+  assert.equal(bad.status, 401);
+});
+
+test('change-password with a wrong current password → 400', async () => {
+  const { token } = await freshUser();
+  const r = await request('POST', '/api/auth/change-password', {
+    token,
+    body: { currentPassword: 'not-my-password', newPassword: 'brandNew1' },
+  });
+  assert.equal(r.status, 400);
+});
+
+test('change-password rejects a too-short new password → 400', async () => {
+  const { token } = await freshUser();
+  const r = await request('POST', '/api/auth/change-password', {
+    token,
+    body: { currentPassword: TEST_PASSWORD, newPassword: 'x' },
+  });
+  assert.equal(r.status, 400);
+});
+
+test('change-password rejects a new password identical to the current one → 400', async () => {
+  const { token } = await freshUser();
+  const r = await request('POST', '/api/auth/change-password', {
+    token,
+    body: { currentPassword: TEST_PASSWORD, newPassword: TEST_PASSWORD },
+  });
+  assert.equal(r.status, 400);
+});
+
+test('change-password without a token → 401', async () => {
+  const r = await request('POST', '/api/auth/change-password', {
+    body: { currentPassword: TEST_PASSWORD, newPassword: 'brandNew1' },
+  });
+  assert.equal(r.status, 401);
+});
