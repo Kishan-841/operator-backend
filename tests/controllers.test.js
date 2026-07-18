@@ -1203,3 +1203,82 @@ test('change-password without a token → 401', async () => {
   });
   assert.equal(r.status, 401);
 });
+
+// ── POST /api/pop-locations/bulk (Excel import) ──────────────────────────────
+test('bulk POP import creates the valid rows and returns a created count', async () => {
+  const r = await request('POST', '/api/pop-locations/bulk', {
+    token: tokens.feasibility,
+    body: { rows: [
+      { name: 'POP Andheri', latitude: 19.11, longitude: 72.86 },
+      { name: 'POP Bandra', latitude: 19.05, longitude: 72.84 },
+    ] },
+  });
+  assert.equal(r.status, 200);
+  assert.equal(r.body.created, 2);
+  assert.equal(r.body.skipped, 0);
+  assert.equal(r.body.errors.length, 0);
+  const list = await request('GET', '/api/pop-locations', { token: tokens.feasibility, });
+  assert.ok(list.body.items.some((p) => p.name === 'POP Andheri'));
+});
+
+test('bulk POP import skips names that already exist and reports the count', async () => {
+  await request('POST', '/api/pop-locations', {
+    token: tokens.feasibility,
+    body: { name: 'POP Existing', latitude: 19.0, longitude: 72.0 },
+  });
+  const r = await request('POST', '/api/pop-locations/bulk', {
+    token: tokens.feasibility,
+    body: { rows: [
+      { name: 'POP Existing', latitude: 19.0, longitude: 72.0 },
+      { name: 'POP Fresh', latitude: 18.9, longitude: 72.8 },
+    ] },
+  });
+  assert.equal(r.body.created, 1);
+  assert.equal(r.body.skipped, 1);
+});
+
+test('bulk POP import de-duplicates repeated names within the same file', async () => {
+  const r = await request('POST', '/api/pop-locations/bulk', {
+    token: tokens.feasibility,
+    body: { rows: [
+      { name: 'POP Dup', latitude: 19.0, longitude: 72.0 },
+      { name: 'POP Dup', latitude: 19.0, longitude: 72.0 },
+    ] },
+  });
+  assert.equal(r.body.created, 1);
+  assert.equal(r.body.skipped, 1);
+});
+
+test('bulk POP import reports rows with invalid coordinates as errors', async () => {
+  const r = await request('POST', '/api/pop-locations/bulk', {
+    token: tokens.feasibility,
+    body: { rows: [
+      { name: 'POP Good', latitude: 19.0, longitude: 72.0 },
+      { name: 'POP Bad', latitude: 999, longitude: 72.0 },
+      { name: '', latitude: 19.0, longitude: 72.0 },
+    ] },
+  });
+  assert.equal(r.body.created, 1);
+  assert.equal(r.body.errors.length, 2);
+  assert.equal(r.body.errors[0].row, 2); // 1-based, matches the spreadsheet row
+});
+
+test('bulk POP import is forbidden for a role without POP-create rights → 403', async () => {
+  const r = await request('POST', '/api/pop-locations/bulk', {
+    token: tokens.nocL2,
+    body: { rows: [{ name: 'POP X', latitude: 19, longitude: 72 }] },
+  });
+  assert.equal(r.status, 403);
+});
+
+test('GET /api/pop-locations?page= returns a paginated envelope', async () => {
+  await request('POST', '/api/pop-locations/bulk', {
+    token: tokens.feasibility,
+    body: { rows: Array.from({ length: 5 }, (_, i) => ({ name: `PG POP ${i}`, latitude: 19 + i / 100, longitude: 72 })) },
+  });
+  const r = await request('GET', '/api/pop-locations?page=1&limit=2', { token: tokens.feasibility });
+  assert.equal(r.status, 200);
+  assert.equal(r.body.items.length, 2);
+  assert.equal(r.body.pagination.total, 5);
+  assert.equal(r.body.pagination.totalPages, 3);
+});
