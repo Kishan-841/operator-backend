@@ -8,6 +8,7 @@ import { z } from 'zod';
 
 export const LEAD_CATEGORIES = ['PIN_RATE', 'JV', 'REVENUE_SHARING', 'ISP'];
 export const BANDWIDTH_MIX = ['MIX_BANDWIDTH', 'PEERING', 'ILL', 'P2P', 'AKAMAI'];
+export const LICENSE_CATEGORIES = ['A', 'B', 'C', 'VNO'];
 
 // --- Category-specific requirement shapes ---
 // user count + rate render under "Operator details" in the form, but stay in
@@ -63,6 +64,9 @@ const coordPair = z.object({
 const isp = z
   .object({
     asNumber: z.number().int().positive().optional().nullable(),
+    // Operating licence — both optional at lead stage ('' accepted from the form).
+    licenseNumber: z.string().trim().optional().nullable(),
+    licenseCategory: z.enum(LICENSE_CATEGORIES).optional().nullable().or(z.literal('')),
     bandwidthMix: z.array(z.enum(BANDWIDTH_MIX)).min(1),
     bandwidthSpecs: z
       .record(
