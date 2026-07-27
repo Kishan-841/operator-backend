@@ -1415,3 +1415,70 @@ test('reassign to the current owner is a no-op 200', async () => {
   assert.equal(r.status, 200);
   assert.equal(r.body.data.assignedSalesId, userId('SALES_USER'));
 });
+
+// ── Bulk import: Owner of Lead resolution by name ────────────────────────────
+const makeSalesUser = async (name, email) => {
+  const password = await bcryptForAccess.hash(TEST_PASSWORD, 10);
+  return prisma.user.create({
+    data: { name, email, password, role: 'SALES_USER', accesses: ['SALES_USER'] },
+  });
+};
+
+test('bulk import assigns a lead to the sales user named in Owner of Lead', async () => {
+  // Unique name per run — test users aren't cleaned between runs, and a repeated
+  // name would (correctly) read as ambiguous.
+  const name = `Priya ${Date.now()}`;
+  const owner = await makeSalesUser(name, `priya-${Date.now()}@test.local`);
+  const r = await request('POST', '/api/leads/bulk', {
+    token: tokens.admin,
+    body: { rows: [pinRow({ email: 'own-a@acme.test', whatsappNumber: '9995550001', phone: '9995550002', _ownerName: name })] },
+  });
+  assert.equal(r.body.created, 1);
+  assert.equal(r.body.ownerUnmatched, 0);
+  const lead = await prisma.lead.findFirst({ where: { email: 'own-a@acme.test' } });
+  assert.equal(lead.assignedSalesId, owner.id);
+});
+
+test('bulk import matches the owner name case-insensitively', async () => {
+  const name = `Rahul ${Date.now()}`;
+  const owner = await makeSalesUser(name, `rahul-${Date.now()}@test.local`);
+  const r = await request('POST', '/api/leads/bulk', {
+    token: tokens.admin,
+    body: { rows: [pinRow({ email: 'own-ci@acme.test', whatsappNumber: '9995550011', phone: '9995550012', _ownerName: `  ${name.toLowerCase()} ` })] },
+  });
+  const lead = await prisma.lead.findFirst({ where: { email: 'own-ci@acme.test' } });
+  assert.equal(lead.assignedSalesId, owner.id);
+});
+
+test('a provided owner name that matches no sales user leaves the lead with the admin and is counted', async () => {
+  const r = await request('POST', '/api/leads/bulk', {
+    token: tokens.admin,
+    body: { rows: [pinRow({ email: 'own-none@acme.test', whatsappNumber: '9995550021', phone: '9995550022', _ownerName: 'Nobody Here' })] },
+  });
+  assert.equal(r.body.created, 1);
+  assert.equal(r.body.ownerUnmatched, 1);
+  const lead = await prisma.lead.findFirst({ where: { email: 'own-none@acme.test' } });
+  assert.equal(lead.assignedSalesId, userId('ADMIN'));
+});
+
+test('a blank owner name is not counted as unmatched (defaults to the admin)', async () => {
+  const r = await request('POST', '/api/leads/bulk', {
+    token: tokens.admin,
+    body: { rows: [pinRow({ email: 'own-blank@acme.test', whatsappNumber: '9995550031', phone: '9995550032', _ownerName: '' })] },
+  });
+  assert.equal(r.body.created, 1);
+  assert.equal(r.body.ownerUnmatched, 0);
+});
+
+test('an owner name shared by two sales users is ambiguous and left unassigned', async () => {
+  const stamp = Date.now();
+  await makeSalesUser('Sam Twin', `sam1-${stamp}@test.local`);
+  await makeSalesUser('Sam Twin', `sam2-${stamp}@test.local`);
+  const r = await request('POST', '/api/leads/bulk', {
+    token: tokens.admin,
+    body: { rows: [pinRow({ email: 'own-amb@acme.test', whatsappNumber: '9995550041', phone: '9995550042', _ownerName: 'Sam Twin' })] },
+  });
+  assert.equal(r.body.ownerUnmatched, 1);
+  const lead = await prisma.lead.findFirst({ where: { email: 'own-amb@acme.test' } });
+  assert.equal(lead.assignedSalesId, userId('ADMIN'));
+});

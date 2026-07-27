@@ -247,11 +247,35 @@ export const bulkCreateLeads = async (req, res) => {
     }
 
     const distributorId = await resolveDistributorId(undefined); // default distributor
+
+    // Owner resolution: map an "Owner of Lead" name → sales user id. Names aren't
+    // unique, so a name shared by two+ users is ambiguous and matches nobody.
+    const salesUsers = await prisma.user.findMany({
+      where: { isActive: true, accesses: { has: 'SALES_USER' } },
+      select: { id: true, name: true },
+    });
+    const ownerByName = new Map();
+    const ambiguousNames = new Set();
+    for (const u of salesUsers) {
+      const key = u.name.trim().toLowerCase();
+      if (ownerByName.has(key)) ambiguousNames.add(key);
+      else ownerByName.set(key, u.id);
+    }
+    // Resolve a raw owner-name cell → { ownerId, unmatched }. Blank is not a
+    // mismatch (the lead simply defaults to the admin).
+    const resolveOwner = (rawName) => {
+      const key = String(rawName ?? '').trim().toLowerCase();
+      if (!key) return { ownerId: req.user.id, unmatched: false };
+      if (ambiguousNames.has(key) || !ownerByName.has(key)) return { ownerId: req.user.id, unmatched: true };
+      return { ownerId: ownerByName.get(key), unmatched: false };
+    };
+
     const errors = [];
     const seenEmails = new Set();
     const seenPhones = new Set();
     let created = 0;
     let skipped = 0;
+    let ownerUnmatched = 0;
 
     for (let i = 0; i < rows.length; i += 1) {
       const raw = rows[i] || {};
@@ -275,6 +299,8 @@ export const bulkCreateLeads = async (req, res) => {
         continue;
       }
 
+      const owner = resolveOwner(raw['Owner of Lead'] ?? raw._ownerName);
+
       try {
         await prisma.$transaction(async (tx) => {
           await tx.$executeRaw`SELECT pg_advisory_xact_lock(${contactLockKey(contact.email)})`;
@@ -294,13 +320,14 @@ export const bulkCreateLeads = async (req, res) => {
               distributorId,
               status: 'NEW',
               createdById: req.user.id,
-              assignedSalesId: req.user.id,
+              assignedSalesId: owner.ownerId,
             },
           });
         });
         seenEmails.add(emailKey);
         if (contact.phone) seenPhones.add(contact.phone);
         created += 1;
+        if (owner.unmatched) ownerUnmatched += 1;
       } catch (err) {
         if (err?.skip) skipped += 1;
         else errors.push({ ...where, reason: 'Could not be saved.' });
@@ -310,12 +337,12 @@ export const bulkCreateLeads = async (req, res) => {
     await logEvent({
       action: 'LEADS_BULK_IMPORTED',
       entityType: 'Lead',
-      summary: `Imported ${created} lead(s); skipped ${skipped}; ${errors.length} error(s)`,
+      summary: `Imported ${created} lead(s); skipped ${skipped}; ${ownerUnmatched} without a matching owner; ${errors.length} error(s)`,
       actor: actorFromReq(req),
     });
-    await refreshSidebarForRoles(['SUPER_ADMIN', 'ADMIN']);
+    await refreshSidebarForRoles(['SALES_USER', 'SUPER_ADMIN', 'ADMIN']);
 
-    return res.json({ created, skipped, errors });
+    return res.json({ created, skipped, ownerUnmatched, errors });
   } catch (error) {
     console.error('[lead.bulkCreateLeads]', error);
     return res.status(500).json({ message: 'Failed to import leads.' });
