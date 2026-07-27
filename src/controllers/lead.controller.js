@@ -232,6 +232,97 @@ export const createLead = async (req, res) => {
 };
 
 /**
+ * POST /api/leads/bulk — admin Excel import. Each row is validated with the same
+ * validator as single-create, duplicates (existing leads or repeats within the
+ * file, by email/phone) are skipped, and the rest are created at NEW status owned
+ * by the uploading admin. No feasibility push — leads stay NEW until acted on.
+ * Returns { created, skipped, errors: [{ sheet, row, reason }] } so one bad or
+ * duplicate row never fails the batch.
+ */
+export const bulkCreateLeads = async (req, res) => {
+  try {
+    const rows = Array.isArray(req.body?.rows) ? req.body.rows : null;
+    if (!rows || rows.length === 0) {
+      return res.status(400).json({ message: 'Provide at least one lead row to import.' });
+    }
+
+    const distributorId = await resolveDistributorId(undefined); // default distributor
+    const errors = [];
+    const seenEmails = new Set();
+    const seenPhones = new Set();
+    let created = 0;
+    let skipped = 0;
+
+    for (let i = 0; i < rows.length; i += 1) {
+      const raw = rows[i] || {};
+      const where = { sheet: raw._sheet ?? null, row: raw._row ?? i + 1 };
+
+      const result = validateLeadPayload(raw);
+      if (!result.ok) {
+        errors.push({ ...where, reason: result.errors[0]?.message || 'Invalid row.' });
+        continue;
+      }
+      const { category, requirementDetails, ...contact } = result.data;
+      const emailKey = contact.email.toLowerCase();
+
+      // Duplicate — against this file, then against existing (non-REJECTED) leads.
+      if (seenEmails.has(emailKey) || (contact.phone && seenPhones.has(contact.phone))) {
+        skipped += 1;
+        continue;
+      }
+      if (await findDuplicateLead(contact)) {
+        skipped += 1;
+        continue;
+      }
+
+      try {
+        await prisma.$transaction(async (tx) => {
+          await tx.$executeRaw`SELECT pg_advisory_xact_lock(${contactLockKey(contact.email)})`;
+          const clash = await findDuplicateLead(contact, undefined, tx);
+          if (clash) {
+            const err = new Error('duplicate');
+            err.skip = true;
+            throw err;
+          }
+          const leadNumber = await generateLeadNumber(tx);
+          await tx.lead.create({
+            data: {
+              leadNumber,
+              category,
+              requirementDetails,
+              ...contact,
+              distributorId,
+              status: 'NEW',
+              createdById: req.user.id,
+              assignedSalesId: req.user.id,
+            },
+          });
+        });
+        seenEmails.add(emailKey);
+        if (contact.phone) seenPhones.add(contact.phone);
+        created += 1;
+      } catch (err) {
+        if (err?.skip) skipped += 1;
+        else errors.push({ ...where, reason: 'Could not be saved.' });
+      }
+    }
+
+    await logEvent({
+      action: 'LEADS_BULK_IMPORTED',
+      entityType: 'Lead',
+      summary: `Imported ${created} lead(s); skipped ${skipped}; ${errors.length} error(s)`,
+      actor: actorFromReq(req),
+    });
+    await refreshSidebarForRoles(['SUPER_ADMIN', 'ADMIN']);
+
+    return res.json({ created, skipped, errors });
+  } catch (error) {
+    console.error('[lead.bulkCreateLeads]', error);
+    return res.status(500).json({ message: 'Failed to import leads.' });
+  }
+};
+
+/**
  * DELETE /api/leads/:id — permanent, cascades documents/notes/requests.
  * Sales may delete their OWN leads while still NEW (not yet in the pipeline);
  * admins may delete any lead at any stage.

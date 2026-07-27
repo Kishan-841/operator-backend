@@ -1,5 +1,5 @@
 import { Router } from 'express';
-import { createLead, getLeads, getLead, updateLead, deleteLead, updateIpDetails } from '../controllers/lead.controller.js';
+import { createLead, bulkCreateLeads, getLeads, getLead, updateLead, deleteLead, updateIpDetails } from '../controllers/lead.controller.js';
 import { getLeadNotes } from '../controllers/note.controller.js';
 import {
   requestDuplicateApproval,
@@ -99,6 +99,7 @@ router.get('/:id/notes', getLeadNotes);
 
 // --- CRUD ---
 router.post('/', requireRole('SALES_USER'), createLead);
+router.post('/bulk', requireRole('SUPER_ADMIN', 'ADMIN'), bulkCreateLeads);
 router.put('/:id', requireRole('SALES_USER'), updateLead);
 router.delete('/:id', requireRole('SALES_USER'), deleteLead); // sales: own NEW leads; admins: any
 router.patch('/:id/ip-details', requireRole('SALES_USER'), updateIpDetails);

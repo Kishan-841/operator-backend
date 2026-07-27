@@ -1282,3 +1282,82 @@ test('GET /api/pop-locations?page= returns a paginated envelope', async () => {
   assert.equal(r.body.pagination.total, 5);
   assert.equal(r.body.pagination.totalPages, 3);
 });
+
+// ── POST /api/leads/bulk (admin Excel import) ────────────────────────────────
+const pinRow = (over = {}) => ({
+  _sheet: 'Pin Rate', _row: 2,
+  category: 'PIN_RATE',
+  organizationName: 'Bulk Org',
+  email: 'bulk1@acme.test',
+  whatsappNumber: '9990000001',
+  phone: '9990000002',
+  requirementDetails: { estimatedUserCount: 100, ratePerUser: 40 },
+  ...over,
+});
+
+test('bulk lead import creates valid rows at NEW status owned by the admin', async () => {
+  const r = await request('POST', '/api/leads/bulk', {
+    token: tokens.admin,
+    body: { rows: [
+      pinRow({ email: 'bl-a@acme.test', whatsappNumber: '9991110001', phone: '9991110002' }),
+      pinRow({ email: 'bl-b@acme.test', whatsappNumber: '9991110003', phone: '9991110004', organizationName: 'Bulk Org B' }),
+    ] },
+  });
+  assert.equal(r.status, 200);
+  assert.equal(r.body.created, 2);
+  assert.equal(r.body.errors.length, 0);
+  const created = await prisma.lead.findFirst({ where: { email: 'bl-a@acme.test' } });
+  assert.equal(created.status, 'NEW');
+  assert.equal(created.createdById, userId('ADMIN'));
+  assert.equal(created.assignedSalesId, userId('ADMIN'));
+});
+
+test('bulk lead import skips a row duplicating an existing lead email', async () => {
+  await request('POST', '/api/leads/bulk', {
+    token: tokens.admin,
+    body: { rows: [pinRow({ email: 'dupe@acme.test', whatsappNumber: '9992220001', phone: '9992220002' })] },
+  });
+  const r = await request('POST', '/api/leads/bulk', {
+    token: tokens.admin,
+    body: { rows: [
+      pinRow({ email: 'dupe@acme.test', whatsappNumber: '9992220005', phone: '9992220006' }),
+      pinRow({ email: 'fresh@acme.test', whatsappNumber: '9992220007', phone: '9992220008' }),
+    ] },
+  });
+  assert.equal(r.body.created, 1);
+  assert.equal(r.body.skipped, 1);
+});
+
+test('bulk lead import skips a repeated email within the same file', async () => {
+  const r = await request('POST', '/api/leads/bulk', {
+    token: tokens.admin,
+    body: { rows: [
+      pinRow({ email: 'same@acme.test', whatsappNumber: '9993330001', phone: '9993330002' }),
+      pinRow({ email: 'same@acme.test', whatsappNumber: '9993330003', phone: '9993330004' }),
+    ] },
+  });
+  assert.equal(r.body.created, 1);
+  assert.equal(r.body.skipped, 1);
+});
+
+test('bulk lead import reports an invalid row with its sheet and row number', async () => {
+  const r = await request('POST', '/api/leads/bulk', {
+    token: tokens.admin,
+    body: { rows: [
+      pinRow({ email: 'ok@acme.test', whatsappNumber: '9994440001', phone: '9994440002' }),
+      pinRow({ _sheet: 'Pin Rate', _row: 7, organizationName: '', email: 'bad@acme.test', whatsappNumber: '9994440003', phone: '9994440004' }),
+    ] },
+  });
+  assert.equal(r.body.created, 1);
+  assert.equal(r.body.errors.length, 1);
+  assert.equal(r.body.errors[0].sheet, 'Pin Rate');
+  assert.equal(r.body.errors[0].row, 7);
+});
+
+test('bulk lead import is forbidden for a non-admin → 403', async () => {
+  const r = await request('POST', '/api/leads/bulk', {
+    token: tokens.sales,
+    body: { rows: [pinRow()] },
+  });
+  assert.equal(r.status, 403);
+});
