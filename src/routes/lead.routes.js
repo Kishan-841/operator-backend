@@ -1,5 +1,5 @@
 import { Router } from 'express';
-import { createLead, bulkCreateLeads, getLeads, getLead, updateLead, deleteLead, updateIpDetails } from '../controllers/lead.controller.js';
+import { createLead, bulkCreateLeads, reassignLead, getLeads, getLead, updateLead, deleteLead, updateIpDetails } from '../controllers/lead.controller.js';
 import { getLeadNotes } from '../controllers/note.controller.js';
 import {
   requestDuplicateApproval,
@@ -103,6 +103,7 @@ router.post('/bulk', requireRole('SUPER_ADMIN', 'ADMIN'), bulkCreateLeads);
 router.put('/:id', requireRole('SALES_USER'), updateLead);
 router.delete('/:id', requireRole('SALES_USER'), deleteLead); // sales: own NEW leads; admins: any
 router.patch('/:id/ip-details', requireRole('SALES_USER'), updateIpDetails);
+router.patch('/:id/assign', requireRole('SUPER_ADMIN', 'ADMIN'), reassignLead);
 
 // --- Stage transitions (2–4) ---
 router.post('/:id/submit-feasibility', requireRole('SALES_USER'), submitFeasibility);

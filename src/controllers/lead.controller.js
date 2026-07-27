@@ -11,7 +11,7 @@ import { addLeadNote } from '../services/leadNote.service.js';
 import { stripLeadForRole, stripLeadsForRole } from '../utils/leadVisibility.js';
 import { actorFromReq } from '../utils/requestContext.js';
 import { isAdmin } from '../utils/roleHelper.js';
-import { refreshSidebarForRoles } from '../services/notification.service.js';
+import { refreshSidebarForRoles, notifyOneUser } from '../services/notification.service.js';
 
 // Lead fields worth diffing in the event log (scalars + the requirement blob).
 const LEAD_DIFF_FIELDS = [
@@ -319,6 +319,70 @@ export const bulkCreateLeads = async (req, res) => {
   } catch (error) {
     console.error('[lead.bulkCreateLeads]', error);
     return res.status(500).json({ message: 'Failed to import leads.' });
+  }
+};
+
+/**
+ * PATCH /api/leads/:id/assign — admin reassigns the lead's sales owner at ANY
+ * stage. Touches only assignedSalesId (ownership is orthogonal to pipeline
+ * status), notifies the new owner, and broadcasts a sidebar refresh so their
+ * dashboard/queue badges update live.
+ */
+export const reassignLead = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const assignedSalesId = typeof req.body?.assignedSalesId === 'string' ? req.body.assignedSalesId.trim() : '';
+    if (!assignedSalesId) {
+      return res.status(400).json({ message: 'Select a sales user to assign the lead to.' });
+    }
+
+    const lead = await prisma.lead.findUnique({
+      where: { id },
+      select: { id: true, leadNumber: true, organizationName: true, assignedSalesId: true },
+    });
+    if (!lead) return res.status(404).json({ message: 'Lead not found.' });
+
+    // Target check: an active user holding SALES access (no admin override — an
+    // admin isn't a sales owner). Mirrors the owner-target rule in resolveOwnerId.
+    const target = await prisma.user.findUnique({
+      where: { id: assignedSalesId },
+      select: { id: true, name: true, accesses: true, isActive: true },
+    });
+    if (!target || !target.isActive || !target.accesses.includes('SALES_USER')) {
+      return res.status(400).json({ message: 'Pick an active sales user as the lead owner.' });
+    }
+
+    // No-op if already owned by this user — return the lead unchanged.
+    if (lead.assignedSalesId === assignedSalesId) {
+      const current = await prisma.lead.findUnique({ where: { id }, include: creatorSelect });
+      return res.json({ message: 'Lead owner unchanged.', data: current });
+    }
+
+    const updated = await prisma.lead.update({
+      where: { id },
+      data: { assignedSalesId },
+      include: creatorSelect,
+    });
+
+    await logEvent({
+      action: 'LEAD_REASSIGNED',
+      entityType: 'Lead',
+      entityId: id,
+      summary: `Reassigned lead ${lead.leadNumber} to ${target.name}`,
+      actor: actorFromReq(req),
+    });
+    await notifyOneUser(assignedSalesId, {
+      type: 'STAGE_TRANSITION',
+      title: `${lead.leadNumber} assigned to you`,
+      message: lead.organizationName,
+      leadId: id,
+    });
+    await refreshSidebarForRoles(['SALES_USER', 'SUPER_ADMIN', 'ADMIN']);
+
+    return res.json({ message: 'Lead reassigned.', data: updated });
+  } catch (error) {
+    console.error('[lead.reassignLead]', error);
+    return res.status(500).json({ message: 'Failed to reassign lead.' });
   }
 };
 

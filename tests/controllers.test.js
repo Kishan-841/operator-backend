@@ -1361,3 +1361,57 @@ test('bulk lead import is forbidden for a non-admin → 403', async () => {
   });
   assert.equal(r.status, 403);
 });
+
+// ── PATCH /api/leads/:id/assign (admin reassign owner) ───────────────────────
+test('admin reassigns a lead to a sales user at a non-sales stage', async () => {
+  const lead = await createLead({ status: 'NOC_L2_PENDING', assignedSalesId: userId('ADMIN') });
+  const r = await request('PATCH', `/api/leads/${lead.id}/assign`, {
+    token: tokens.admin,
+    body: { assignedSalesId: userId('SALES_USER') },
+  });
+  assert.equal(r.status, 200);
+  assert.equal(r.body.data.assignedSalesId, userId('SALES_USER'));
+  const after = await prisma.lead.findUnique({ where: { id: lead.id }, select: { assignedSalesId: true, status: true } });
+  assert.equal(after.assignedSalesId, userId('SALES_USER'));
+  assert.equal(after.status, 'NOC_L2_PENDING'); // stage unchanged
+});
+
+test('reassign notifies the new owner', async () => {
+  const lead = await createLead({ status: 'PRICING_PENDING', assignedSalesId: userId('ADMIN') });
+  await request('PATCH', `/api/leads/${lead.id}/assign`, {
+    token: tokens.admin,
+    body: { assignedSalesId: userId('SALES_USER') },
+  });
+  const notif = await prisma.notification.findFirst({
+    where: { userId: userId('SALES_USER'), leadId: lead.id },
+  });
+  assert.ok(notif, 'new owner received a notification');
+});
+
+test('reassign rejects a target without sales access → 400', async () => {
+  const lead = await createLead({ status: 'NEW', assignedSalesId: userId('ADMIN') });
+  const r = await request('PATCH', `/api/leads/${lead.id}/assign`, {
+    token: tokens.admin,
+    body: { assignedSalesId: userId('NOC_L2_USER') },
+  });
+  assert.equal(r.status, 400);
+});
+
+test('reassign is forbidden for a non-admin → 403', async () => {
+  const lead = await createLead({ status: 'NEW', assignedSalesId: userId('SALES_USER') });
+  const r = await request('PATCH', `/api/leads/${lead.id}/assign`, {
+    token: tokens.sales,
+    body: { assignedSalesId: userId('SALES_USER') },
+  });
+  assert.equal(r.status, 403);
+});
+
+test('reassign to the current owner is a no-op 200', async () => {
+  const lead = await createLead({ status: 'NEW', assignedSalesId: userId('SALES_USER') });
+  const r = await request('PATCH', `/api/leads/${lead.id}/assign`, {
+    token: tokens.admin,
+    body: { assignedSalesId: userId('SALES_USER') },
+  });
+  assert.equal(r.status, 200);
+  assert.equal(r.body.data.assignedSalesId, userId('SALES_USER'));
+});
