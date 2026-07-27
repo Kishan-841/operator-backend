@@ -239,6 +239,16 @@ export const createLead = async (req, res) => {
  * Returns { created, skipped, errors: [{ sheet, row, reason }] } so one bad or
  * duplicate row never fails the batch.
  */
+// Human reason naming WHICH field collided with an existing lead (email and/or
+// mobile), plus that lead's number — so a skipped import row is never a mystery.
+const describeDuplicate = (dupe, { email, phone }) => {
+  const parts = [];
+  if (email && dupe.email?.toLowerCase() === email.toLowerCase()) parts.push('email');
+  if (phone && dupe.phone === phone) parts.push('mobile number');
+  const fields = parts.length ? parts.join(' and ') : 'contact details';
+  return `Duplicate ${fields} — already used by ${dupe.leadNumber}.`;
+};
+
 export const bulkCreateLeads = async (req, res) => {
   try {
     const rows = Array.isArray(req.body?.rows) ? req.body.rows : null;
@@ -271,11 +281,17 @@ export const bulkCreateLeads = async (req, res) => {
     };
 
     const errors = [];
+    const duplicates = []; // { sheet, row, reason } — one per skipped duplicate
     const seenEmails = new Set();
     const seenPhones = new Set();
     let created = 0;
     let skipped = 0;
     let ownerUnmatched = 0;
+
+    const noteDuplicate = (where, reason) => {
+      duplicates.push({ ...where, reason });
+      skipped += 1;
+    };
 
     for (let i = 0; i < rows.length; i += 1) {
       const raw = rows[i] || {};
@@ -289,13 +305,19 @@ export const bulkCreateLeads = async (req, res) => {
       const { category, requirementDetails, ...contact } = result.data;
       const emailKey = contact.email.toLowerCase();
 
-      // Duplicate — against this file, then against existing (non-REJECTED) leads.
-      if (seenEmails.has(emailKey) || (contact.phone && seenPhones.has(contact.phone))) {
-        skipped += 1;
+      // Duplicate — against this file first (name the field), then against
+      // existing (non-REJECTED) leads (name the field + the matched lead).
+      if (seenEmails.has(emailKey)) {
+        noteDuplicate(where, 'Duplicate email — repeated earlier in this file.');
         continue;
       }
-      if (await findDuplicateLead(contact)) {
-        skipped += 1;
+      if (contact.phone && seenPhones.has(contact.phone)) {
+        noteDuplicate(where, 'Duplicate mobile number — repeated earlier in this file.');
+        continue;
+      }
+      const existingDupe = await findDuplicateLead(contact);
+      if (existingDupe) {
+        noteDuplicate(where, describeDuplicate(existingDupe, contact));
         continue;
       }
 
@@ -308,6 +330,7 @@ export const bulkCreateLeads = async (req, res) => {
           if (clash) {
             const err = new Error('duplicate');
             err.skip = true;
+            err.reason = describeDuplicate(clash, contact);
             throw err;
           }
           const leadNumber = await generateLeadNumber(tx);
@@ -329,7 +352,7 @@ export const bulkCreateLeads = async (req, res) => {
         created += 1;
         if (owner.unmatched) ownerUnmatched += 1;
       } catch (err) {
-        if (err?.skip) skipped += 1;
+        if (err?.skip) noteDuplicate(where, err.reason || 'Duplicate of an existing lead.');
         else errors.push({ ...where, reason: 'Could not be saved.' });
       }
     }
@@ -342,7 +365,7 @@ export const bulkCreateLeads = async (req, res) => {
     });
     await refreshSidebarForRoles(['SALES_USER', 'SUPER_ADMIN', 'ADMIN']);
 
-    return res.json({ created, skipped, ownerUnmatched, errors });
+    return res.json({ created, skipped, ownerUnmatched, duplicates, errors });
   } catch (error) {
     console.error('[lead.bulkCreateLeads]', error);
     return res.status(500).json({ message: 'Failed to import leads.' });

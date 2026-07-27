@@ -1482,3 +1482,39 @@ test('an owner name shared by two sales users is ambiguous and left unassigned',
   const lead = await prisma.lead.findFirst({ where: { email: 'own-amb@acme.test' } });
   assert.equal(lead.assignedSalesId, userId('ADMIN'));
 });
+
+// ── Bulk import: itemized duplicate reasons ──────────────────────────────────
+test('bulk import reports an in-file email repeat with the field named', async () => {
+  const r = await request('POST', '/api/leads/bulk', {
+    token: tokens.admin,
+    body: { rows: [
+      pinRow({ _sheet: 'Pin Rate', _row: 2, email: 'rep@acme.test', whatsappNumber: '9996660001', phone: '9996660002' }),
+      pinRow({ _sheet: 'JV', _row: 2, email: 'rep@acme.test', whatsappNumber: '9996660003', phone: '9996660004' }),
+    ] },
+  });
+  assert.equal(r.body.created, 1);
+  assert.equal(r.body.skipped, 1);
+  assert.equal(r.body.duplicates.length, 1);
+  assert.deepEqual(
+    { sheet: r.body.duplicates[0].sheet, row: r.body.duplicates[0].row },
+    { sheet: 'JV', row: 2 },
+  );
+  assert.match(r.body.duplicates[0].reason, /email/i);
+  assert.match(r.body.duplicates[0].reason, /repeated/i);
+});
+
+test('bulk import reports an existing-lead phone duplicate with the lead number', async () => {
+  await request('POST', '/api/leads/bulk', {
+    token: tokens.admin,
+    body: { rows: [pinRow({ email: 'first@acme.test', whatsappNumber: '9997770001', phone: '9997770002' })] },
+  });
+  const existing = await prisma.lead.findFirst({ where: { email: 'first@acme.test' }, select: { leadNumber: true } });
+  const r = await request('POST', '/api/leads/bulk', {
+    token: tokens.admin,
+    body: { rows: [pinRow({ _sheet: 'ISP', _row: 5, email: 'different@acme.test', whatsappNumber: '9997770009', phone: '9997770002' })] },
+  });
+  assert.equal(r.body.created, 0);
+  assert.equal(r.body.duplicates.length, 1);
+  assert.match(r.body.duplicates[0].reason, /mobile|phone/i);
+  assert.match(r.body.duplicates[0].reason, new RegExp(existing.leadNumber));
+});
