@@ -1559,3 +1559,56 @@ test('bulk-imported ISP leads carry no distributor', async () => {
   const lead = await prisma.lead.findFirst({ where: { organizationName: 'ISP Bulk' }, select: { distributorId: true } });
   assert.equal(lead.distributorId, null);
 });
+
+// ── Refresh-token sessions ───────────────────────────────────────────────────
+test('login returns an access token and a refresh token', async () => {
+  const r = await request('POST', '/api/auth/login', {
+    body: { email: 'sales_user@test.local', password: TEST_PASSWORD },
+  });
+  assert.equal(r.status, 200);
+  assert.ok(r.body.token, 'access token');
+  assert.ok(r.body.refreshToken, 'refresh token');
+});
+
+test('refresh with a valid token returns a new access token and rotates the refresh token', async () => {
+  const login = await request('POST', '/api/auth/login', {
+    body: { email: 'sales_user@test.local', password: TEST_PASSWORD },
+  });
+  const r = await request('POST', '/api/auth/refresh', { body: { refreshToken: login.body.refreshToken } });
+  assert.equal(r.status, 200);
+  assert.ok(r.body.token, 'new access token');
+  assert.ok(r.body.refreshToken, 'rotated refresh token');
+  assert.notEqual(r.body.refreshToken, login.body.refreshToken, 'refresh token is rotated');
+  // The old (used) refresh token can no longer be used.
+  const reuse = await request('POST', '/api/auth/refresh', { body: { refreshToken: login.body.refreshToken } });
+  assert.equal(reuse.status, 401);
+});
+
+test('refresh with an unknown token → 401', async () => {
+  const r = await request('POST', '/api/auth/refresh', { body: { refreshToken: 'not-a-real-token' } });
+  assert.equal(r.status, 401);
+});
+
+test('refresh without a token → 400', async () => {
+  const r = await request('POST', '/api/auth/refresh', { body: {} });
+  assert.equal(r.status, 400);
+});
+
+test('logout revokes the refresh token so it can no longer refresh', async () => {
+  const login = await request('POST', '/api/auth/login', {
+    body: { email: 'sales_user@test.local', password: TEST_PASSWORD },
+  });
+  await request('POST', '/api/auth/logout', { token: login.body.token, body: { refreshToken: login.body.refreshToken } });
+  const r = await request('POST', '/api/auth/refresh', { body: { refreshToken: login.body.refreshToken } });
+  assert.equal(r.status, 401);
+});
+
+test('refresh for a deactivated user → 401 and the token is revoked', async () => {
+  const password = await bcryptForAccess.hash(TEST_PASSWORD, 10);
+  const email = `deact-${Date.now()}@test.local`;
+  const u = await prisma.user.create({ data: { name: 'Deact', email, password, role: 'SALES_USER', accesses: ['SALES_USER'] } });
+  const login = await request('POST', '/api/auth/login', { body: { email, password: TEST_PASSWORD } });
+  await prisma.user.update({ where: { id: u.id }, data: { isActive: false } });
+  const r = await request('POST', '/api/auth/refresh', { body: { refreshToken: login.body.refreshToken } });
+  assert.equal(r.status, 401);
+});

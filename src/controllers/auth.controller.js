@@ -3,13 +3,21 @@ import jwt from 'jsonwebtoken';
 import prisma from '../config/db.js';
 import { logEvent } from '../services/statusChangeLog.service.js';
 import { actorFromReq } from '../utils/requestContext.js';
+import {
+  issueRefreshToken,
+  findLiveRefreshToken,
+  revokeRefreshToken,
+  revokeRefreshTokenById,
+} from '../services/refreshToken.service.js';
 
 // Sessions expire after 1 hour (override with JWT_EXPIRES_IN). An expired
 // token gets a 401 from the auth middleware; the frontend interceptor then
 // drops the session and returns the user to /login.
 const signToken = (user) =>
   jwt.sign({ userId: user.id, role: user.role }, process.env.JWT_SECRET, {
-    expiresIn: process.env.JWT_EXPIRES_IN || '1h',
+    // Short-lived access token — silently renewed via the refresh token, so a
+    // short window here no longer means the user gets logged out mid-work.
+    expiresIn: process.env.JWT_EXPIRES_IN || '30m',
   });
 
 const publicUser = (user) => ({
@@ -69,11 +77,46 @@ export const login = async (req, res) => {
     return res.json({
       message: 'Login successful',
       token: signToken(user),
+      refreshToken: await issueRefreshToken(user.id),
       user: publicUser(user),
     });
   } catch (error) {
     console.error('[auth.login]', error);
     return res.status(500).json({ message: 'Login failed.' });
+  }
+};
+
+/**
+ * POST /api/auth/refresh — exchange a valid refresh token for a fresh access
+ * token. Unauthenticated (the access token may be expired — that's the point).
+ * Rotates the refresh token: the presented one is revoked and a new one issued.
+ */
+export const refresh = async (req, res) => {
+  try {
+    const raw = req.body?.refreshToken;
+    if (!raw || typeof raw !== 'string') {
+      return res.status(400).json({ message: 'A refresh token is required.' });
+    }
+    const row = await findLiveRefreshToken(raw);
+    if (!row) {
+      return res.status(401).json({ message: 'Session expired. Please log in again.' });
+    }
+    // Re-load the user so a deactivated / deleted account can't be revived.
+    const user = await prisma.user.findUnique({ where: { id: row.userId } });
+    if (!user || !user.isActive) {
+      await revokeRefreshTokenById(row.id);
+      return res.status(401).json({ message: 'Session expired. Please log in again.' });
+    }
+    // Rotate: revoke the used token, issue a new one.
+    await revokeRefreshTokenById(row.id);
+    return res.json({
+      token: signToken(user),
+      refreshToken: await issueRefreshToken(user.id),
+      user: publicUser(user),
+    });
+  } catch (error) {
+    console.error('[auth.refresh]', error);
+    return res.status(500).json({ message: 'Failed to refresh session.' });
   }
 };
 
@@ -83,10 +126,11 @@ export const me = async (req, res) => {
 };
 
 /**
- * POST /api/auth/logout — stateless JWT, so logout is client-side (drop the
- * token). Endpoint exists for symmetry and future server-side revocation.
+ * POST /api/auth/logout — drop the client token and revoke the refresh token
+ * server-side so the session can't be renewed after signing out.
  */
-export const logout = async (_req, res) => {
+export const logout = async (req, res) => {
+  await revokeRefreshToken(req.body?.refreshToken);
   return res.json({ message: 'Logged out.' });
 };
 

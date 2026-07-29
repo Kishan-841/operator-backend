@@ -156,8 +156,25 @@ model User {
   dupApprovalsDecided    DuplicateLeadApproval[] @relation("DupApprovalDecidedBy")
   deliveryReqAssigned    DeliveryRequest[]     @relation("DeliveryRequestAssignedToStore")
   deliveryRequestLogs    DeliveryRequestLog[]  @relation("DeliveryRequestLogPerformedBy")
+  refreshTokens          RefreshToken[]        @relation("UserRefreshTokens")
 
   @@index([role])
+}
+
+// Long-lived refresh tokens (refresh-token-sessions). The raw token is never
+// stored — only its sha-256 hash. A short-lived access JWT is minted from a
+// valid refresh token via POST /api/auth/refresh; on each use the old token is
+// rotated (revoked) and a new one issued. Revoked/expired rows are inert.
+model RefreshToken {
+  id        String    @id @default(uuid())
+  userId    String
+  user      User      @relation("UserRefreshTokens", fields: [userId], references: [id], onDelete: Cascade)
+  tokenHash String    @unique
+  expiresAt DateTime
+  revokedAt DateTime?
+  createdAt DateTime  @default(now())
+
+  @@index([userId])
 }
 
 model Lead {
