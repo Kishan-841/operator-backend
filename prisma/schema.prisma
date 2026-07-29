@@ -177,7 +177,8 @@ model Lead {
   // the docs stage: 'PROPRIETORSHIP' | 'PARTNERSHIP' | 'PVT_LTD'.
   // Contact person
   contactPersonName String?
-  phone             String?
+  phone             String? // mobile (10 digits); optional if a landline is given
+  landlineNumber    String? // landline; at least one of phone/landline is required
   gender            String? // 'Male' | 'Female' | 'Other'
   // Location
   areaName     String?

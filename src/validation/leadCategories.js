@@ -97,6 +97,27 @@ const mobile = z
   .min(1, 'Mobile number is required.')
   .regex(/^\d{10}$/, 'Enter exactly 10 digits.');
 
+// Contact-person mobile — optional (a landline may stand in), but a 10-digit
+// number when present. Empty string is treated as "not provided".
+const optionalMobile = z
+  .string()
+  .trim()
+  .refine((v) => v === '' || /^\d{10}$/.test(v), 'Enter exactly 10 digits.')
+  .optional()
+  .nullable();
+
+// Landline — optional; 8–12 digits after dropping one optional leading 0,
+// hyphens and spaces (e.g. 022-12345678, 01234-567890, 04012345678).
+const optionalLandline = z
+  .string()
+  .trim()
+  .refine((v) => v === '' || /^\d{8,12}$/.test(v.replace(/[-\s]/g, '')), 'Enter a valid landline (8–12 digits).')
+  .optional()
+  .nullable();
+
+// True when a phone/landline value is actually present (not blank/null).
+const hasValue = (v) => typeof v === 'string' && v.trim() !== '';
+
 // Common fields — apply to every category.
 const contactBase = z.object({
   category: z.enum(LEAD_CATEGORIES),
@@ -107,9 +128,10 @@ const contactBase = z.object({
   whatsappNumber: mobile,
   existingServiceProvider: optStr,
   annualRevenue: z.number().min(0).optional().nullable(),
-  // Contact person
+  // Contact person — at least one of phone/landline (enforced below).
   contactPersonName: optStr,
-  phone: mobile,
+  phone: optionalMobile,
+  landlineNumber: optionalLandline,
   gender: optStr,
   // Location
   areaName: optStr,
@@ -123,6 +145,10 @@ const contactBase = z.object({
   sourceOfLead: optStr,
   customerInterestLevel: z.enum(['HOT', 'WARM', 'COLD']).optional().nullable(),
   notes: optStr,
+}).superRefine((val, ctx) => {
+  if (!hasValue(val.phone) && !hasValue(val.landlineNumber)) {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['phone'], message: 'Enter a mobile or landline number.' });
+  }
 });
 
 /**
