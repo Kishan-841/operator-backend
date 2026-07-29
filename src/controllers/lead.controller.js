@@ -159,7 +159,8 @@ export const createLead = async (req, res) => {
       }
     }
 
-    const distributorId = await resolveDistributorId(req.body?.distributorId);
+    // ISP leads have no distributor concept — store null, not the GAZON default.
+    const distributorId = category === 'ISP' ? null : await resolveDistributorId(req.body?.distributorId);
     const ownerId = await resolveOwnerId(req, req.user.id);
 
     // Did we deliberately decide to allow this duplicate (admin override, or a
@@ -256,7 +257,7 @@ export const bulkCreateLeads = async (req, res) => {
       return res.status(400).json({ message: 'Provide at least one lead row to import.' });
     }
 
-    const distributorId = await resolveDistributorId(undefined); // default distributor
+    const defaultDistributorId = await resolveDistributorId(undefined); // GAZON, for non-ISP rows
 
     // Owner resolution: map an "Owner of Lead" name → sales user id. Names aren't
     // unique, so a name shared by two+ users is ambiguous and matches nobody.
@@ -340,7 +341,8 @@ export const bulkCreateLeads = async (req, res) => {
               category,
               requirementDetails,
               ...contact,
-              distributorId,
+              // ISP leads have no distributor concept.
+              distributorId: category === 'ISP' ? null : defaultDistributorId,
               status: 'NEW',
               createdById: req.user.id,
               assignedSalesId: owner.ownerId,
@@ -598,7 +600,8 @@ export const updateLead = async (req, res) => {
       });
     }
 
-    const distributorId = await resolveDistributorId(req.body?.distributorId ?? existing.distributorId);
+    // ISP leads have no distributor — keep it null even on edit.
+    const distributorId = category === 'ISP' ? null : await resolveDistributorId(req.body?.distributorId ?? existing.distributorId);
     // Admins may reassign the owner while editing; others keep the current owner.
     const ownerId = await resolveOwnerId(req, existing.assignedSalesId);
 

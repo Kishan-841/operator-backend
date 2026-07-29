@@ -67,7 +67,19 @@ test('options endpoint seeds GAZON, orders it first, and is open to sales', asyn
 });
 
 test('lead without a distributor lands under GAZON; explicit pick is stored; bogus id → 400', async () => {
-  const noPick = await request('POST', '/api/leads', { token: tokens.sales, body: validLead() });
+  // Distributor applies to non-ISP leads (ISP carries no distributor), so this
+  // exercises the default/pick/validation with a PIN_RATE lead.
+  const pinLead = (extra = {}) => ({
+    category: 'PIN_RATE',
+    organizationName: 'Pin Co',
+    email: 'pin@acme.test',
+    phone: '9876543210',
+    whatsappNumber: '9876543210',
+    requirementDetails: { estimatedUserCount: 100, ratePerUser: 40 },
+    ...extra,
+  });
+
+  const noPick = await request('POST', '/api/leads', { token: tokens.sales, body: pinLead() });
   assert.equal(noPick.status, 201);
   const gazon = await prisma.distributor.findFirst({ where: { isDefault: true } });
   assert.ok(gazon, 'GAZON exists after first creation');
@@ -76,14 +88,14 @@ test('lead without a distributor lands under GAZON; explicit pick is stored; bog
   const dist = await prisma.distributor.create({ data: { name: 'North Head', phone: '9111111111' } });
   const picked = await request('POST', '/api/leads', {
     token: tokens.sales,
-    body: validLead({ email: 'b@acme.test', phone: '9876500001', whatsappNumber: '9876500001', distributorId: dist.id }),
+    body: pinLead({ email: 'b@acme.test', phone: '9876500001', whatsappNumber: '9876500001', distributorId: dist.id }),
   });
   assert.equal(picked.status, 201);
   assert.equal(picked.body.data.distributorId, dist.id);
 
   const bogus = await request('POST', '/api/leads', {
     token: tokens.sales,
-    body: validLead({ email: 'c@acme.test', phone: '9876500002', whatsappNumber: '9876500002', distributorId: '00000000-0000-4000-8000-000000000000' }),
+    body: pinLead({ email: 'c@acme.test', phone: '9876500002', whatsappNumber: '9876500002', distributorId: '00000000-0000-4000-8000-000000000000' }),
   });
   assert.equal(bogus.status, 400);
 });

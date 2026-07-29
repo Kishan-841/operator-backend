@@ -1518,3 +1518,44 @@ test('bulk import reports an existing-lead phone duplicate with the lead number'
   assert.match(r.body.duplicates[0].reason, /mobile|phone/i);
   assert.match(r.body.duplicates[0].reason, new RegExp(existing.leadNumber));
 });
+
+// ── ISP leads carry no distributor ───────────────────────────────────────────
+test('creating an ISP lead stores no distributor (null)', async () => {
+  const r = await request('POST', '/api/leads', {
+    token: tokens.sales,
+    body: { ...validLead(), email: `isp-nd-${Date.now()}@acme.test`, phone: '9990001111', whatsappNumber: '9990001111' },
+  });
+  assert.equal(r.status, 201);
+  assert.equal(r.body.data.distributorId, null);
+});
+
+test('creating a non-ISP lead still gets the default distributor', async () => {
+  const r = await request('POST', '/api/leads', {
+    token: tokens.sales,
+    body: {
+      category: 'PIN_RATE',
+      organizationName: 'Pin Co',
+      email: `pin-nd-${Date.now()}@acme.test`,
+      phone: '9990002222',
+      whatsappNumber: '9990002222',
+      requirementDetails: { estimatedUserCount: 100, ratePerUser: 40 },
+    },
+  });
+  assert.equal(r.status, 201);
+  assert.ok(r.body.data.distributorId, 'non-ISP lead has a distributor');
+});
+
+test('bulk-imported ISP leads carry no distributor', async () => {
+  const r = await request('POST', '/api/leads/bulk', {
+    token: tokens.admin,
+    body: { rows: [{
+      _sheet: 'ISP', _row: 2, category: 'ISP',
+      organizationName: 'ISP Bulk', email: `ispbulk-${Date.now()}@acme.test`,
+      whatsappNumber: '9990003333', phone: '9990003334',
+      requirementDetails: { bandwidthMix: ['ILL'], bandwidthSpecs: { ILL: { value: 100, unit: 'MB' } } },
+    }] },
+  });
+  assert.equal(r.body.created, 1);
+  const lead = await prisma.lead.findFirst({ where: { organizationName: 'ISP Bulk' }, select: { distributorId: true } });
+  assert.equal(lead.distributorId, null);
+});
