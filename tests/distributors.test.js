@@ -256,3 +256,83 @@ test('distributor list carries franchise counts; GAZON counts null-distributor l
   assert.equal(leads.status, 200);
   assert.equal(leads.body.items.length, 2);
 });
+
+// ── POST /api/distributors/bulk (Excel import) ───────────────────────────────
+const distRow = (over = {}) => ({
+  _sheet: 'Pin Rate', _row: 2,
+  category: 'PIN_RATE',
+  organizationName: 'Head Franchise A',
+  email: 'head-a@dist.test',
+  whatsappNumber: '9876543210',
+  phone: '9811111111',
+  requirementDetails: {},
+  ...over,
+});
+
+test('bulk distributor import creates the valid rows', async () => {
+  const r = await request('POST', '/api/distributors/bulk', {
+    token: tokens.admin,
+    body: { rows: [
+      distRow({ email: 'bd-a@dist.test', whatsappNumber: '9990000001', phone: '9990000002' }),
+      distRow({ email: 'bd-b@dist.test', whatsappNumber: '9990000003', phone: '9990000004', organizationName: 'Head B' }),
+    ] },
+  });
+  assert.equal(r.status, 200);
+  assert.equal(r.body.created, 2);
+  assert.equal(r.body.errors.length, 0);
+  const made = await prisma.distributor.findFirst({ where: { email: 'bd-a@dist.test' } });
+  assert.ok(made, 'distributor stored');
+  assert.equal(made.name, 'Head Franchise A');
+});
+
+test('bulk distributor import skips a row duplicating an existing email and names the field', async () => {
+  await request('POST', '/api/distributors/bulk', {
+    token: tokens.admin,
+    body: { rows: [distRow({ email: 'dupe@dist.test', whatsappNumber: '9992220001', phone: '9992220002' })] },
+  });
+  const r = await request('POST', '/api/distributors/bulk', {
+    token: tokens.admin,
+    body: { rows: [
+      distRow({ email: 'dupe@dist.test', whatsappNumber: '9992220005', phone: '9992220006' }),
+      distRow({ email: 'fresh@dist.test', whatsappNumber: '9992220007', phone: '9992220008' }),
+    ] },
+  });
+  assert.equal(r.body.created, 1);
+  assert.equal(r.body.skipped, 1);
+  assert.equal(r.body.duplicates.length, 1);
+  assert.match(r.body.duplicates[0].reason, /email/i);
+});
+
+test('bulk distributor import de-duplicates a repeated phone within the file', async () => {
+  const r = await request('POST', '/api/distributors/bulk', {
+    token: tokens.admin,
+    body: { rows: [
+      distRow({ email: 'p1@dist.test', whatsappNumber: '9993330001', phone: '9993330009' }),
+      distRow({ email: 'p2@dist.test', whatsappNumber: '9993330003', phone: '9993330009' }),
+    ] },
+  });
+  assert.equal(r.body.created, 1);
+  assert.equal(r.body.skipped, 1);
+  assert.match(r.body.duplicates[0].reason, /mobile|phone/i);
+});
+
+test('bulk distributor import reports an invalid row with its sheet and row', async () => {
+  const r = await request('POST', '/api/distributors/bulk', {
+    token: tokens.admin,
+    body: { rows: [
+      distRow({ email: 'ok@dist.test', whatsappNumber: '9994440001', phone: '9994440002' }),
+      distRow({ _sheet: 'Pin Rate', _row: 9, organizationName: '', email: 'bad@dist.test', whatsappNumber: '9994440003', phone: '9994440004' }),
+    ] },
+  });
+  assert.equal(r.body.created, 1);
+  assert.equal(r.body.errors.length, 1);
+  assert.equal(r.body.errors[0].row, 9);
+});
+
+test('bulk distributor import is forbidden for a non-admin → 403', async () => {
+  const r = await request('POST', '/api/distributors/bulk', {
+    token: tokens.sales,
+    body: { rows: [distRow()] },
+  });
+  assert.equal(r.status, 403);
+});

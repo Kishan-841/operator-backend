@@ -76,7 +76,7 @@ const findClash = async ({ phone, email }, excludeId) => {
   if (!or.length) return null;
   return prisma.distributor.findFirst({
     where: { OR: or, ...(excludeId ? { NOT: { id: excludeId } } : {}) },
-    select: { name: true },
+    select: { name: true, email: true, phone: true },
   });
 };
 
@@ -139,6 +139,82 @@ export const createDistributor = async (req, res) => {
   } catch (error) {
     console.error('[distributor.create]', error);
     return res.status(500).json({ message: 'Failed to create distributor.' });
+  }
+};
+
+/**
+ * POST /api/distributors/bulk (ADMIN) — Excel import. Each row is validated with
+ * the distributor variant, duplicates (existing distributors or repeats within
+ * the file, by email/phone) are skipped, and the rest created. Returns
+ * { created, skipped, duplicates: [{ sheet, row, reason }], errors: [...] } so
+ * one bad or duplicate row never fails the batch.
+ */
+export const bulkCreateDistributors = async (req, res) => {
+  try {
+    const rows = Array.isArray(req.body?.rows) ? req.body.rows : null;
+    if (!rows || rows.length === 0) {
+      return res.status(400).json({ message: 'Provide at least one distributor row to import.' });
+    }
+
+    const errors = [];
+    const duplicates = [];
+    const seenEmails = new Set();
+    const seenPhones = new Set();
+    let created = 0;
+    let skipped = 0;
+    const noteDup = (where, reason) => { duplicates.push({ ...where, reason }); skipped += 1; };
+
+    for (let i = 0; i < rows.length; i += 1) {
+      const raw = rows[i] || {};
+      const where = { sheet: raw._sheet ?? null, row: raw._row ?? i + 1 };
+
+      const result = normalize(raw);
+      if (!result.ok) {
+        errors.push({ ...where, reason: result.errors?.[0]?.message || result.message || 'Invalid row.' });
+        continue;
+      }
+      const { name, phone, email } = result.data;
+      const emailKey = email ? email.toLowerCase() : null;
+
+      // Duplicate — within this file first (name the field), then the DB.
+      if (emailKey && seenEmails.has(emailKey)) {
+        noteDup(where, 'Duplicate email — repeated earlier in this file.');
+        continue;
+      }
+      if (phone && seenPhones.has(phone)) {
+        noteDup(where, 'Duplicate mobile number — repeated earlier in this file.');
+        continue;
+      }
+      const clash = await findClash(result.data);
+      if (clash) {
+        const fields = [];
+        if (emailKey && clash.email?.toLowerCase() === emailKey) fields.push('email');
+        if (phone && clash.phone === phone) fields.push('mobile number');
+        const which = fields.length ? fields.join(' and ') : 'contact';
+        noteDup(where, `Duplicate ${which} — already used by distributor "${clash.name}".`);
+        continue;
+      }
+
+      try {
+        await prisma.distributor.create({ data: result.data });
+        if (emailKey) seenEmails.add(emailKey);
+        if (phone) seenPhones.add(phone);
+        created += 1;
+      } catch {
+        errors.push({ ...where, reason: 'Could not be saved.' });
+      }
+    }
+
+    await logEvent({
+      action: 'DISTRIBUTORS_BULK_IMPORTED',
+      entityType: 'Distributor',
+      summary: `Imported ${created} distributor(s); skipped ${skipped}; ${errors.length} error(s)`,
+      actor: actorFromReq(req),
+    });
+    return res.json({ created, skipped, duplicates, errors });
+  } catch (error) {
+    console.error('[distributor.bulkCreate]', error);
+    return res.status(500).json({ message: 'Failed to import distributors.' });
   }
 };
 

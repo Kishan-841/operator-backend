@@ -3,6 +3,7 @@ import {
   listDistributors,
   distributorOptions,
   createDistributor,
+  bulkCreateDistributors,
   updateDistributor,
   deleteDistributor,
   distributorLeads,
@@ -19,6 +20,7 @@ const adminOnly = requireRole('SUPER_ADMIN', 'ADMIN');
 router.get('/options', distributorOptions); // any authenticated staff
 router.get('/', adminOnly, listDistributors);
 router.post('/', adminOnly, createDistributor);
+router.post('/bulk', adminOnly, bulkCreateDistributors);
 router.put('/:id', adminOnly, updateDistributor);
 router.delete('/:id', adminOnly, deleteDistributor);
 router.get('/:id/leads', adminOnly, distributorLeads);
