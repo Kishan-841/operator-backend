@@ -3,6 +3,7 @@ import { parsePagination, paginatedResponse } from '../utils/pagination.js';
 import { validateLeadPayload } from '../validation/leadCategories.js';
 import { logEvent } from '../services/statusChangeLog.service.js';
 import { actorFromReq } from '../utils/requestContext.js';
+import { ensureFranchiseLead } from '../services/dualEntity.service.js';
 
 /**
  * Distributors head one or more franchises (leads). GAZON is the seeded
@@ -126,8 +127,16 @@ export const createDistributor = async (req, res) => {
     if (clash) {
       return res.status(400).json({ message: `Distributor "${clash.name}" already uses these contact details.` });
     }
+    // Dual-role: creating a distributor also creates (or links) its franchise-lead
+    // atomically — if the lead can't be made, the distributor isn't either.
     // isDefault is not API-settable — the default was set up once and stays.
-    const created = await prisma.distributor.create({ data });
+    const created = await prisma.$transaction(async (tx) => {
+      const dist = await tx.distributor.create({ data });
+      if (data.profile) {
+        await ensureFranchiseLead(tx, { distributor: dist, profile: data.profile, actorId: req.user.id });
+      }
+      return dist;
+    });
     await logEvent({
       action: 'DISTRIBUTOR_CREATED',
       entityType: 'Distributor',
@@ -135,7 +144,8 @@ export const createDistributor = async (req, res) => {
       summary: `Created distributor ${created.name}`,
       actor: actorFromReq(req),
     });
-    return res.status(201).json({ message: 'Distributor created.', data: created });
+    const message = data.profile ? 'Distributor and Franchise created successfully.' : 'Distributor created.';
+    return res.status(201).json({ message, data: created });
   } catch (error) {
     console.error('[distributor.create]', error);
     return res.status(500).json({ message: 'Failed to create distributor.' });

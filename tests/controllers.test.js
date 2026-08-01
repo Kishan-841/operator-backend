@@ -1612,3 +1612,63 @@ test('refresh for a deactivated user → 401 and the token is revoked', async ()
   const r = await request('POST', '/api/auth/refresh', { body: { refreshToken: login.body.refreshToken } });
   assert.equal(r.status, 401);
 });
+
+// ── Dual-role: lead-create "createDistributor" toggle ────────────────────────
+const pinLeadBody = (over = {}) => ({
+  category: 'PIN_RATE',
+  organizationName: 'Toggle Co',
+  email: 'toggle@acme.test',
+  whatsappNumber: '9876543210',
+  phone: '9811111111',
+  requirementDetails: { estimatedUserCount: 100, ratePerUser: 40 },
+  ...over,
+});
+
+test('lead create with createDistributor:true also creates a linked distributor', async () => {
+  const r = await request('POST', '/api/leads', {
+    token: tokens.sales,
+    body: pinLeadBody({ email: 'dr-a@acme.test', whatsappNumber: '9995551001', phone: '9995551002', createDistributor: true }),
+  });
+  assert.equal(r.status, 201);
+  const dist = await prisma.distributor.findFirst({ where: { email: 'dr-a@acme.test' } });
+  assert.ok(dist, 'distributor created from the lead');
+  assert.equal(r.body.data.distributorId, dist.id, 'lead linked to the new distributor');
+});
+
+test('lead create without the toggle creates no distributor for the business', async () => {
+  const r = await request('POST', '/api/leads', {
+    token: tokens.sales,
+    body: pinLeadBody({ email: 'dr-off@acme.test', whatsappNumber: '9995551011', phone: '9995551012' }),
+  });
+  assert.equal(r.status, 201);
+  const dist = await prisma.distributor.findFirst({ where: { email: 'dr-off@acme.test' } });
+  assert.equal(dist, null, 'no distributor created when the toggle is off');
+});
+
+test('an ISP lead with createDistributor:true carries the distributor link (dual-role exception)', async () => {
+  const r = await request('POST', '/api/leads', {
+    token: tokens.sales,
+    body: { category: 'ISP', organizationName: 'ISP Dual', email: 'ispdual@acme.test',
+      whatsappNumber: '9995551021', phone: '9995551022',
+      requirementDetails: { bandwidthMix: ['ILL'], bandwidthSpecs: { ILL: { value: 100, unit: 'MB' } } },
+      createDistributor: true },
+  });
+  assert.equal(r.status, 201);
+  assert.ok(r.body.data.distributorId, 'ISP dual-role lead carries a distributor');
+  const dist = await prisma.distributor.findFirst({ where: { email: 'ispdual@acme.test' } });
+  assert.equal(r.body.data.distributorId, dist.id);
+});
+
+test('lead create with the toggle reuses an existing distributor for the same business', async () => {
+  const existing = await prisma.distributor.create({
+    data: { name: 'Existing Head', email: 'reuse@acme.test', phone: '9995551032' },
+  });
+  const r = await request('POST', '/api/leads', {
+    token: tokens.sales,
+    body: pinLeadBody({ organizationName: 'Existing Head', email: 'reuse@acme.test', whatsappNumber: '9995551031', phone: '9995551032', createDistributor: true }),
+  });
+  assert.equal(r.status, 201);
+  assert.equal(r.body.data.distributorId, existing.id, 'reused the existing distributor');
+  const count = await prisma.distributor.count({ where: { email: 'reuse@acme.test' } });
+  assert.equal(count, 1, 'no duplicate distributor');
+});

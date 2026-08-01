@@ -336,3 +336,49 @@ test('bulk distributor import is forbidden for a non-admin → 403', async () =>
   });
   assert.equal(r.status, 403);
 });
+
+// ── Dual-role: creating a distributor also creates its franchise-lead ─────────
+const fullDist = (over = {}) => ({
+  category: 'PIN_RATE',
+  organizationName: 'Dual Head',
+  email: 'dual@dist.test',
+  whatsappNumber: '9876543210',
+  phone: '9811111111',
+  requirementDetails: {},
+  ...over,
+});
+
+test('creating a distributor also creates a linked franchise-lead at NEW', async () => {
+  const r = await request('POST', '/api/distributors', {
+    token: tokens.admin,
+    body: fullDist({ email: 'df-a@dist.test', phone: '9990000011', whatsappNumber: '9990000011' }),
+  });
+  assert.equal(r.status, 201);
+  const distId = r.body.data.id;
+  const lead = await prisma.lead.findFirst({ where: { email: 'df-a@dist.test' } });
+  assert.ok(lead, 'franchise-lead created');
+  assert.equal(lead.distributorId, distId, 'lead is linked to the distributor');
+  assert.equal(lead.status, 'NEW');
+});
+
+test('creating a distributor for a business that is already a lead links the existing lead', async () => {
+  // A PIN_RATE lead already exists for this contact.
+  await request('POST', '/api/leads', {
+    token: tokens.sales,
+    body: { category: 'PIN_RATE', organizationName: 'Already Lead', email: 'already@dist.test',
+      whatsappNumber: '9990000021', phone: '9990000022',
+      requirementDetails: { estimatedUserCount: 100, ratePerUser: 40 } },
+  });
+  const before = await prisma.lead.count({ where: { email: 'already@dist.test' } });
+  assert.equal(before, 1);
+
+  const r = await request('POST', '/api/distributors', {
+    token: tokens.admin,
+    body: fullDist({ organizationName: 'Already Lead', email: 'already@dist.test', phone: '9990000022', whatsappNumber: '9990000021' }),
+  });
+  assert.equal(r.status, 201);
+  const after = await prisma.lead.count({ where: { email: 'already@dist.test' } });
+  assert.equal(after, 1, 'no duplicate lead — the existing one was reused');
+  const lead = await prisma.lead.findFirst({ where: { email: 'already@dist.test' } });
+  assert.equal(lead.distributorId, r.body.data.id, 'existing lead now linked to the new distributor');
+});

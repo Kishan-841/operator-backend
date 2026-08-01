@@ -12,6 +12,7 @@ import { stripLeadForRole, stripLeadsForRole } from '../utils/leadVisibility.js'
 import { actorFromReq } from '../utils/requestContext.js';
 import { isAdmin } from '../utils/roleHelper.js';
 import { refreshSidebarForRoles, notifyOneUser } from '../services/notification.service.js';
+import { ensureDistributorForLead } from '../services/dualEntity.service.js';
 
 // Lead fields worth diffing in the event log (scalars + the requirement blob).
 const LEAD_DIFF_FIELDS = [
@@ -162,6 +163,10 @@ export const createLead = async (req, res) => {
     // ISP leads have no distributor concept — store null, not the GAZON default.
     const distributorId = category === 'ISP' ? null : await resolveDistributorId(req.body?.distributorId);
     const ownerId = await resolveOwnerId(req, req.user.id);
+    // Dual-role: when the user opts in, this lead's business is also created (or
+    // reused) as a distributor and linked — including ISP (the only case where an
+    // ISP lead carries a distributor).
+    const alsoDistributor = req.body?.createDistributor === true;
 
     // Did we deliberately decide to allow this duplicate (admin override, or a
     // consumed approval)? If not, we must re-check inside the lock below.
@@ -192,6 +197,10 @@ export const createLead = async (req, res) => {
           throw err;
         }
       }
+      // Dual-role: create/reuse the distributor first so the lead can link to it.
+      const finalDistributorId = alsoDistributor
+        ? await ensureDistributorForLead(tx, { contact, payload: result.data, actorId: req.user.id })
+        : distributorId;
       const leadNumber = await generateLeadNumber(tx);
       const created = await tx.lead.create({
         data: {
@@ -199,7 +208,7 @@ export const createLead = async (req, res) => {
           category,
           requirementDetails,
           ...contact,
-          distributorId,
+          distributorId: finalDistributorId,
           status: 'NEW',
           createdById: req.user.id,
           assignedSalesId: ownerId,
@@ -224,7 +233,8 @@ export const createLead = async (req, res) => {
     });
     await addLeadNote({ leadId: lead.id, stage: 'LEAD', body: lead.notes, actor: actorFromReq(req) });
 
-    return res.status(201).json({ message: 'Lead created.', data: lead });
+    const message = alsoDistributor ? 'Franchise and Distributor created successfully.' : 'Lead created.';
+    return res.status(201).json({ message, data: lead });
   } catch (error) {
     if (error?.status === 400) return res.status(400).json({ message: error.message });
     console.error('[lead.createLead]', error);
