@@ -1232,3 +1232,51 @@ test('a Sales-only staff user cannot send back a NOC stage → 403', async () =>
     403,
   );
 });
+
+// ── NOC L3: SNAT / Dynamic pools accept multiple entries ─────────────────────
+const mkLead = () => createLead({
+  status: 'NOC_L3_PENDING', category: 'PIN_RATE', requirementDetails: {},
+  aggregatorSelections: [{ type: 'MIKROTIK', quantity: 1 }],
+  aggregatorTypes: ['MIKROTIK'], aggregatorType: 'MIKROTIK',
+});
+const mkUnit = (over = {}) => ({
+  mikrotikIdentity: 'MK-1', mikrotikIp: '10.0.0.2', mikrotikGateway: '10.0.0.1',
+  snatPool: ['100.64.0.0/22'], dynamicPool: ['10.10.0.0/16'], vlan: '100', ...over,
+});
+
+test('completeNocL3 stores multiple SNAT and dynamic pools as arrays', async () => {
+  const lead = await mkLead();
+  const updated = await sm.completeNocL3({
+    leadId: lead.id, actor: actor('NOC_L3_USER'),
+    ipAllocation: { MIKROTIK: [mkUnit({ snatPool: ['100.64.0.0/22', '100.64.4.0/22'], dynamicPool: ['10.10.0.0/16'] })] },
+  });
+  assert.deepEqual(updated.ipAllocation.MIKROTIK[0].snatPool, ['100.64.0.0/22', '100.64.4.0/22']);
+  assert.deepEqual(updated.ipAllocation.MIKROTIK[0].dynamicPool, ['10.10.0.0/16']);
+});
+
+test('completeNocL3 drops blank pool entries and keeps the non-empty ones', async () => {
+  const lead = await mkLead();
+  const updated = await sm.completeNocL3({
+    leadId: lead.id, actor: actor('NOC_L3_USER'),
+    ipAllocation: { MIKROTIK: [mkUnit({ snatPool: ['100.64.0.0/22', '', '  '], dynamicPool: ['10.10.0.0/16'] })] },
+  });
+  assert.deepEqual(updated.ipAllocation.MIKROTIK[0].snatPool, ['100.64.0.0/22']);
+});
+
+test('completeNocL3 still accepts a legacy single-string pool value', async () => {
+  const lead = await mkLead();
+  const updated = await sm.completeNocL3({
+    leadId: lead.id, actor: actor('NOC_L3_USER'),
+    ipAllocation: { MIKROTIK: [mkUnit({ snatPool: '100.64.0.0/22', dynamicPool: '10.10.0.0/16' })] },
+  });
+  assert.deepEqual(updated.ipAllocation.MIKROTIK[0].snatPool, ['100.64.0.0/22']);
+});
+
+test('completeNocL3 rejects a MIKROTIK config with no SNAT pool', async () => {
+  const lead = await mkLead();
+  await rejectsWithStatus(
+    () => sm.completeNocL3({ leadId: lead.id, actor: actor('NOC_L3_USER'),
+      ipAllocation: { MIKROTIK: [mkUnit({ snatPool: [] })] } }),
+    400,
+  );
+});

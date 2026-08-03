@@ -15,6 +15,16 @@ export const NOC_L3_FIELD_KEYS = {
 // MIKROTIK sections may be left empty at NOC L3.
 export const BNG_CLASS = ['BNG', 'BIRAS'];
 
+// Keys that hold MULTIPLE values (an "Add" list in the form) — stored as a
+// cleaned string array. Reads/writes tolerate a legacy single string.
+export const MULTI_L3_KEYS = ['snatPool', 'dynamicPool'];
+
+/** Normalize a submitted/stored pool value to a trimmed, non-empty string array. */
+export const toPoolList = (v) => {
+  const arr = Array.isArray(v) ? v : v == null ? [] : [v];
+  return arr.map((x) => String(x ?? '').trim()).filter(Boolean);
+};
+
 export const KNOWN_AGGREGATORS = Object.keys(NOC_L3_FIELD_KEYS);
 
 // Custom types (added at stage 10) have no bespoke field set — they use this

@@ -8,7 +8,7 @@ import { hasAccess } from '../utils/roleHelper.js';
 import { AGREEMENT_DOC_TYPE } from '../utils/documentTypes.js';
 import { missingRequiredDocs } from '../utils/docRequirements.js';
 import { generateDeliveryRequestNumber } from './leadNumber.service.js';
-import { KNOWN_AGGREGATORS, BNG_CLASS, requiredKeysFor } from '../utils/nocL3Fields.js';
+import { KNOWN_AGGREGATORS, BNG_CLASS, requiredKeysFor, MULTI_L3_KEYS, toPoolList } from '../utils/nocL3Fields.js';
 
 // Append to a delivery request's audit trail. Soft-fail — never break the flow.
 const logDeliveryRequest = async ({ deliveryRequestId, action, actor, details = null }) => {
@@ -961,12 +961,20 @@ export const completeNocL3 = async ({ leadId, actor, ipAllocation }) => {
     if (units.length !== quantity) {
       throw httpError(400, `Provide ${quantity} ${type} configuration${quantity === 1 ? '' : 's'}.`);
     }
+    // A required key is present if it has a non-empty value — for a multi key
+    // (snat/dynamic pool) that means at least one non-empty entry.
+    const keyMissing = (u, k) =>
+      MULTI_L3_KEYS.includes(k) ? toPoolList(u[k]).length === 0 : !String(u[k] ?? '').trim();
     units.forEach((u, i) => {
-      const missing = !u || typeof u !== 'object' || required.some((k) => !String(u[k] ?? '').trim());
+      const missing = !u || typeof u !== 'object' || required.some((k) => keyMissing(u, k));
       if (missing) throw httpError(400, `Complete the ${type} #${i + 1} configuration before saving.`);
     });
-    // Store only the selected types' units — extras were never validated.
-    stored[type] = units;
+    // Store the selected types' units, normalizing multi keys to cleaned arrays.
+    stored[type] = units.map((u) => {
+      const out = { ...u };
+      for (const k of MULTI_L3_KEYS) if (k in out) out[k] = toPoolList(out[k]);
+      return out;
+    });
   }
   return advance({
     leadId,
