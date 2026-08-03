@@ -830,16 +830,16 @@ export const completeInstallation = ({ leadId, actor, notes }) =>
   });
 
 // Stage 9: NOC L2 switch/network config → aggregator confirm (sales).
-// Stage 9 is now a plain confirm — the switch/port config + monitoring software
-// moved to the L3→L2 handoff completion (completeL3ToL2). The NOC L2 user just
-// acknowledges the lead reached them and it advances to aggregator confirmation.
-export const completeNocL2 = ({ leadId, actor, notes }) =>
+// Stage 9: the NOC L2 user records the switch/port config TYPE (the monitoring
+// software — OPM/DUDE/CACTI — is captured later at the L3→L2 handoff). Advances
+// to aggregator confirmation.
+export const completeNocL2 = ({ leadId, actor, config, notes }) =>
   advance({
     leadId,
     actor,
     from: 'NOC_L2_PENDING',
     to: 'AGGREGATOR_CONFIRM_PENDING',
-    data: { nocL2AssignedToId: actor.id },
+    data: { nocL2AssignedToId: actor.id, nocL2Config: config ?? null, nocL2ConfigNotes: notes ?? null },
     notifyRole: 'SALES_USER',
     notifyTitle: 'awaiting aggregator confirmation',
     outgoing: ['NOC_L2_USER'],
@@ -1085,10 +1085,10 @@ export const assignL3ToL2 = async ({ leadId, actor, assignedToId, notes }) => {
 };
 
 // Stage 13: NOC L2 receives L3→L2 assignment → client handover (sales, M6).
-// Stage 13: the assigned NOC L2 user completes the handoff — and now enters the
-// switch/port config + monitoring software (moved here from stage 9). Advances
-// to client handover.
-export const completeL3ToL2 = ({ leadId, actor, notes, config, configNotes }) =>
+// Stage 13: whoever closes the handoff (the assigned NOC L2 user, or NOC L3
+// doing it himself) records the monitoring software (OPM/DUDE/CACTI), merged
+// onto the config type captured at stage 9. Advances to client handover.
+export const completeL3ToL2 = ({ leadId, actor, notes, software, configNotes }) =>
   advance({
     leadId,
     actor,
@@ -1097,8 +1097,8 @@ export const completeL3ToL2 = ({ leadId, actor, notes, config, configNotes }) =>
     data: (lead) => ({
       pipelineNotes: appendNote(lead, 'L3_TO_L2', notes, actor),
       nocL2AssignedToId: actor.id,
-      nocL2Config: config ?? null,
-      nocL2ConfigNotes: configNotes ?? null,
+      nocL2Config: { ...(lead.nocL2Config || {}), software },
+      nocL2ConfigNotes: configNotes ?? lead.nocL2ConfigNotes ?? null,
     }),
     notifyRole: 'SALES_USER',
     notifyTitle: 'ready for client handover',

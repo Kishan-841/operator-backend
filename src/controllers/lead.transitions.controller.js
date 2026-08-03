@@ -263,24 +263,24 @@ export const completeInstallation = async (req, res) => {
 
 /** POST /api/leads/:id/noc-l2 (NOC_L2) { configNotes?, config? } */
 const SOFTWARE_KEYS = ['opm', 'dude', 'cacti'];
-const normalizeNocL2Config = (raw) => {
-  if (!raw || typeof raw !== 'object') return null;
-  const configType = raw.configType === 'PORT' ? 'PORT' : 'SWITCH';
+const normalizeSoftware = (raw) => {
   const software = {};
-  for (const k of SOFTWARE_KEYS) software[k] = Boolean(raw.software?.[k]);
-  return { configType, software };
+  for (const k of SOFTWARE_KEYS) software[k] = Boolean(raw?.[k]);
+  return software;
 };
 
 export const completeNocL2 = async (req, res) => {
   try {
-    // The config + monitoring software moved to the L3→L2 handoff; stage 9 is now
-    // just a confirm-and-advance with an optional note.
+    // Stage 9 captures only the switch/port config type; the monitoring software
+    // is done later at the L3→L2 handoff.
+    const configType = req.body?.config?.configType === 'PORT' ? 'PORT' : 'SWITCH';
     const data = await sm.completeNocL2({
       leadId: req.params.id,
       actor: actorFromReq(req),
-      notes: asText(req.body?.notes),
+      config: { configType },
+      notes: asText(req.body?.configNotes ?? req.body?.notes),
     });
-    return res.json({ message: 'NOC L2 confirmed.', data });
+    return res.json({ message: 'NOC L2 config recorded.', data });
   } catch (error) {
     return fail(res, error);
   }
@@ -365,10 +365,10 @@ export const completeNocL3 = async (req, res) => {
 /** POST /api/leads/:id/l3-to-l2 (NOC_L2) { notes? } */
 export const completeL3ToL2 = async (req, res) => {
   try {
-    // The switch/port config + monitoring software are captured here now — all
-    // three (OPM, DUDE, CACTI) are compulsory before the handoff can complete.
-    const config = normalizeNocL2Config(req.body?.config);
-    if (!config || !SOFTWARE_KEYS.every((k) => config.software[k])) {
+    // The monitoring software (OPM/DUDE/CACTI) is captured here — all three are
+    // compulsory before the handoff can complete. The config type came at stage 9.
+    const software = normalizeSoftware(req.body?.software);
+    if (!SOFTWARE_KEYS.every((k) => software[k])) {
       return res.status(400).json({
         message: 'Complete all monitoring entries (OPM, DUDE, CACTI) before completing the handoff.',
       });
@@ -377,7 +377,7 @@ export const completeL3ToL2 = async (req, res) => {
       leadId: req.params.id,
       actor: actorFromReq(req),
       notes: asText(req.body?.notes),
-      config,
+      software,
       configNotes: asText(req.body?.configNotes),
     });
     return res.json({ message: 'Handoff completed.', data });
