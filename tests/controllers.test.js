@@ -991,7 +991,7 @@ test('POST /:id/l3-to-l2 allows the NOC L3 user to mark the handoff completed', 
     token: nocL3,
     body: {
       notes: 'Verified with L2 on call — closing from L3 side',
-      software: { opm: true, dude: true, cacti: true },
+      software: { opm: true, dude: true, cacti: true, logifyMail: true },
     },
   });
   assert.equal(r.status, 200);
@@ -1690,10 +1690,19 @@ test('POST /:id/l3-to-l2 with all monitoring entries completes the handoff → c
   const lead = await createLead({ status: 'L3_TO_L2_HANDOFF', nocL2Config: { configType: 'PORT' } });
   const r = await request('POST', `/api/leads/${lead.id}/l3-to-l2`, {
     token: tokens.nocL2,
-    body: { software: { opm: true, dude: true, cacti: true }, notes: 'handed off' },
+    body: { software: { opm: true, dude: true, cacti: true, logifyMail: true }, notes: 'handed off' },
   });
   assert.equal(r.status, 200);
   assert.equal(r.body.data.status, 'CLIENT_HANDOVER_PENDING');
   assert.equal(r.body.data.nocL2Config.software.opm, true);
   assert.equal(r.body.data.nocL2Config.configType, 'PORT', 'stage-9 config type preserved');
+});
+
+test('POST /:id/l3-to-l2 now also requires Logify Mail', async () => {
+  const lead = await createLead({ status: 'L3_TO_L2_HANDOFF', nocL2Config: { configType: 'SWITCH' } });
+  const r = await request('POST', `/api/leads/${lead.id}/l3-to-l2`, {
+    token: tokens.nocL2,
+    body: { software: { opm: true, dude: true, cacti: true } }, // logifyMail missing
+  });
+  assert.equal(r.status, 400);
 });

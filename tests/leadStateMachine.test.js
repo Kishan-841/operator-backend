@@ -696,7 +696,7 @@ test('a lead walks the full pipeline NEW → COMPLETED', async () => {
 
   await sm.completeL3ToL2({
     leadId: lead.id, actor: actor('NOC_L2_USER'), notes: 'assigned',
-    software: { opm: true, dude: true, cacti: true },
+    software: { opm: true, dude: true, cacti: true, logifyMail: true },
   });
   assert.equal(await status(lead.id), 'CLIENT_HANDOVER_PENDING');
 
@@ -1299,7 +1299,7 @@ test('completeL3ToL2 records the monitoring software, preserving the stage-9 con
   const updated = await sm.completeL3ToL2({
     leadId: lead.id,
     actor: actor('NOC_L2_USER'),
-    software: { opm: true, dude: true, cacti: true },
+    software: { opm: true, dude: true, cacti: true, logifyMail: true },
     notes: 'monitoring set',
   });
   assert.equal(updated.status, 'CLIENT_HANDOVER_PENDING');

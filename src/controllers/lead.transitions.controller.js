@@ -262,7 +262,7 @@ export const completeInstallation = async (req, res) => {
 };
 
 /** POST /api/leads/:id/noc-l2 (NOC_L2) { configNotes?, config? } */
-const SOFTWARE_KEYS = ['opm', 'dude', 'cacti'];
+const SOFTWARE_KEYS = ['opm', 'dude', 'cacti', 'logifyMail'];
 const normalizeSoftware = (raw) => {
   const software = {};
   for (const k of SOFTWARE_KEYS) software[k] = Boolean(raw?.[k]);
