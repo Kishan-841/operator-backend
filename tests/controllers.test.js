@@ -1706,3 +1706,23 @@ test('POST /:id/l3-to-l2 now also requires Logify Mail', async () => {
   });
   assert.equal(r.status, 400);
 });
+
+test('POST /:id/noc-l3 accepts MIKROTIK snat/dynamic pools sent as arrays (multi-pool)', async () => {
+  const nocL3 = await login('NOC_L3_USER');
+  const lead = await createLead({
+    status: 'NOC_L3_PENDING', category: 'PIN_RATE', requirementDetails: {},
+    aggregatorSelections: [{ type: 'MIKROTIK', quantity: 1 }],
+    aggregatorTypes: ['MIKROTIK'], aggregatorType: 'MIKROTIK',
+  });
+  const r = await request('POST', `/api/leads/${lead.id}/noc-l3`, {
+    token: nocL3,
+    body: {
+      MIKROTIK: [{
+        mikrotikIdentity: 'mk-core-01', mikrotikIp: '10.0.0.2', mikrotikGateway: '10.0.0.1',
+        snatPool: ['100.64.0.0/22', '100.64.4.0/22'], dynamicPool: ['10.10.0.0/16'], vlan: '100',
+      }],
+    },
+  });
+  assert.equal(r.status, 200, JSON.stringify(r.body));
+  assert.deepEqual(r.body.data.ipAllocation.MIKROTIK[0].snatPool, ['100.64.0.0/22', '100.64.4.0/22']);
+});

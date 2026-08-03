@@ -1,4 +1,4 @@
-import { allowedKeysFor } from '../utils/nocL3Fields.js';
+import { allowedKeysFor, MULTI_L3_KEYS, toPoolList } from '../utils/nocL3Fields.js';
 import { normalizeAggregatorName } from '../utils/aggregators.js';
 
 // Stage-10 body: { selections: [{ type, quantity }], remark? }.
@@ -62,7 +62,12 @@ export const validateIpAllocation = (body = {}) => {
       const clean = {};
       for (const k of allowed) {
         const v = unit[k];
-        if (typeof v === 'string' && v.trim()) clean[k] = v.trim();
+        // Multi keys (SNAT / dynamic pool) are string arrays — keep the cleaned,
+        // non-empty list (a legacy single string is tolerated).
+        if (MULTI_L3_KEYS.includes(k)) {
+          const list = toPoolList(v);
+          if (list.length) clean[k] = list;
+        } else if (typeof v === 'string' && v.trim()) clean[k] = v.trim();
         else if (typeof v === 'number' && Number.isFinite(v)) clean[k] = String(v);
       }
       if (Object.keys(clean).length) cleanUnits.push(clean);
