@@ -989,7 +989,10 @@ test('POST /:id/l3-to-l2 allows the NOC L3 user to mark the handoff completed', 
   const lead = await createLead({ status: 'L3_TO_L2_HANDOFF' });
   const r = await request('POST', `/api/leads/${lead.id}/l3-to-l2`, {
     token: nocL3,
-    body: { notes: 'Verified with L2 on call — closing from L3 side' },
+    body: {
+      notes: 'Verified with L2 on call — closing from L3 side',
+      config: { configType: 'SWITCH', software: { opm: true, dude: true, cacti: true } },
+    },
   });
   assert.equal(r.status, 200);
   assert.equal(r.body.data.status, 'CLIENT_HANDOVER_PENDING');
@@ -1671,4 +1674,28 @@ test('lead create with the toggle reuses an existing distributor for the same bu
   assert.equal(r.body.data.distributorId, existing.id, 'reused the existing distributor');
   const count = await prisma.distributor.count({ where: { email: 'reuse@acme.test' } });
   assert.equal(count, 1, 'no duplicate distributor');
+});
+
+// ── L3→L2 handoff completion now requires the monitoring software ────────────
+test('POST /:id/l3-to-l2 rejects an incomplete monitoring set → 400', async () => {
+  const lead = await createLead({ status: 'L3_TO_L2_HANDOFF' });
+  const r = await request('POST', `/api/leads/${lead.id}/l3-to-l2`, {
+    token: tokens.nocL2,
+    body: { config: { configType: 'SWITCH', software: { opm: true, dude: false, cacti: true } } },
+  });
+  assert.equal(r.status, 400);
+});
+
+test('POST /:id/l3-to-l2 with full config completes the handoff → client handover', async () => {
+  const lead = await createLead({ status: 'L3_TO_L2_HANDOFF' });
+  const r = await request('POST', `/api/leads/${lead.id}/l3-to-l2`, {
+    token: tokens.nocL2,
+    body: {
+      config: { configType: 'PORT', software: { opm: true, dude: true, cacti: true } },
+      configNotes: 'ports configured', notes: 'handed off',
+    },
+  });
+  assert.equal(r.status, 200);
+  assert.equal(r.body.data.status, 'CLIENT_HANDOVER_PENDING');
+  assert.equal(r.body.data.nocL2Config.configType, 'PORT');
 });

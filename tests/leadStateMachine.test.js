@@ -678,7 +678,7 @@ test('a lead walks the full pipeline NEW → COMPLETED', async () => {
   await sm.completeInstallation({ leadId: lead.id, actor: actor('DELIVERY_USER'), notes: 'done' });
   assert.equal(await status(lead.id), 'NOC_L2_PENDING');
 
-  await sm.completeNocL2({ leadId: lead.id, actor: actor('NOC_L2_USER'), configNotes: 'vlan set' });
+  await sm.completeNocL2({ leadId: lead.id, actor: actor('NOC_L2_USER'), notes: 'reached L2' });
   assert.equal(await status(lead.id), 'AGGREGATOR_CONFIRM_PENDING');
 
   await sm.confirmAggregator({ leadId: lead.id, actor: actor('SALES_USER'), selections: [{ type: 'BNG', quantity: 1 }], remark: 'ok' });
@@ -694,7 +694,10 @@ test('a lead walks the full pipeline NEW → COMPLETED', async () => {
   });
   assert.equal(await status(lead.id), 'L3_TO_L2_HANDOFF');
 
-  await sm.completeL3ToL2({ leadId: lead.id, actor: actor('NOC_L2_USER'), notes: 'assigned' });
+  await sm.completeL3ToL2({
+    leadId: lead.id, actor: actor('NOC_L2_USER'), notes: 'assigned',
+    config: { configType: 'SWITCH', software: { opm: true, dude: true, cacti: true } },
+  });
   assert.equal(await status(lead.id), 'CLIENT_HANDOVER_PENDING');
 
   await sm.completeClientHandover({ leadId: lead.id, actor: actor('SALES_USER'), notes: 'handed over' });
@@ -1279,4 +1282,26 @@ test('completeNocL3 rejects a MIKROTIK config with no SNAT pool', async () => {
       ipAllocation: { MIKROTIK: [mkUnit({ snatPool: [] })] } }),
     400,
   );
+});
+
+// ── NOC L2 config relocated from stage 9 to the L3→L2 handoff ─────────────────
+test('completeNocL2 is now a plain confirm — advances without any config', async () => {
+  const lead = await createLead({ status: 'NOC_L2_PENDING' });
+  const updated = await sm.completeNocL2({ leadId: lead.id, actor: actor('NOC_L2_USER'), notes: 'reached L2' });
+  assert.equal(updated.status, 'AGGREGATOR_CONFIRM_PENDING');
+});
+
+test('completeL3ToL2 stores the switch config + software and advances to client handover', async () => {
+  const lead = await createLead({ status: 'L3_TO_L2_HANDOFF' });
+  const updated = await sm.completeL3ToL2({
+    leadId: lead.id,
+    actor: actor('NOC_L2_USER'),
+    config: { configType: 'SWITCH', software: { opm: true, dude: true, cacti: true } },
+    configNotes: 'ports up',
+    notes: 'done',
+  });
+  assert.equal(updated.status, 'CLIENT_HANDOVER_PENDING');
+  assert.equal(updated.nocL2Config.configType, 'SWITCH');
+  assert.equal(updated.nocL2Config.software.opm, true);
+  assert.equal(updated.nocL2ConfigNotes, 'ports up');
 });

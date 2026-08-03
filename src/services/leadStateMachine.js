@@ -830,21 +830,20 @@ export const completeInstallation = ({ leadId, actor, notes }) =>
   });
 
 // Stage 9: NOC L2 switch/network config → aggregator confirm (sales).
-export const completeNocL2 = ({ leadId, actor, configNotes, config }) =>
+// Stage 9 is now a plain confirm — the switch/port config + monitoring software
+// moved to the L3→L2 handoff completion (completeL3ToL2). The NOC L2 user just
+// acknowledges the lead reached them and it advances to aggregator confirmation.
+export const completeNocL2 = ({ leadId, actor, notes }) =>
   advance({
     leadId,
     actor,
     from: 'NOC_L2_PENDING',
     to: 'AGGREGATOR_CONFIRM_PENDING',
-    data: {
-      nocL2AssignedToId: actor.id,
-      nocL2ConfigNotes: configNotes ?? null,
-      nocL2Config: config ?? null,
-    },
+    data: { nocL2AssignedToId: actor.id },
     notifyRole: 'SALES_USER',
     notifyTitle: 'awaiting aggregator confirmation',
     outgoing: ['NOC_L2_USER'],
-    note: configNotes,
+    note: notes,
     noteStage: 'NOC_L2',
   });
 
@@ -1086,13 +1085,21 @@ export const assignL3ToL2 = async ({ leadId, actor, assignedToId, notes }) => {
 };
 
 // Stage 13: NOC L2 receives L3→L2 assignment → client handover (sales, M6).
-export const completeL3ToL2 = ({ leadId, actor, notes }) =>
+// Stage 13: the assigned NOC L2 user completes the handoff — and now enters the
+// switch/port config + monitoring software (moved here from stage 9). Advances
+// to client handover.
+export const completeL3ToL2 = ({ leadId, actor, notes, config, configNotes }) =>
   advance({
     leadId,
     actor,
     from: 'L3_TO_L2_HANDOFF',
     to: 'CLIENT_HANDOVER_PENDING',
-    data: (lead) => ({ pipelineNotes: appendNote(lead, 'L3_TO_L2', notes, actor) }),
+    data: (lead) => ({
+      pipelineNotes: appendNote(lead, 'L3_TO_L2', notes, actor),
+      nocL2AssignedToId: actor.id,
+      nocL2Config: config ?? null,
+      nocL2ConfigNotes: configNotes ?? null,
+    }),
     notifyRole: 'SALES_USER',
     notifyTitle: 'ready for client handover',
     outgoing: ['NOC_L2_USER'],

@@ -273,19 +273,14 @@ const normalizeNocL2Config = (raw) => {
 
 export const completeNocL2 = async (req, res) => {
   try {
-    const config = normalizeNocL2Config(req.body?.config);
-    if (!config || !SOFTWARE_KEYS.every((k) => config.software[k])) {
-      return res.status(400).json({
-        message: 'Complete all monitoring entries (OPM, DUDE, CACTI) before finishing L2 config.',
-      });
-    }
+    // The config + monitoring software moved to the L3→L2 handoff; stage 9 is now
+    // just a confirm-and-advance with an optional note.
     const data = await sm.completeNocL2({
       leadId: req.params.id,
       actor: actorFromReq(req),
-      configNotes: asText(req.body?.configNotes),
-      config,
+      notes: asText(req.body?.notes),
     });
-    return res.json({ message: 'NOC L2 config recorded.', data });
+    return res.json({ message: 'NOC L2 confirmed.', data });
   } catch (error) {
     return fail(res, error);
   }
@@ -370,12 +365,22 @@ export const completeNocL3 = async (req, res) => {
 /** POST /api/leads/:id/l3-to-l2 (NOC_L2) { notes? } */
 export const completeL3ToL2 = async (req, res) => {
   try {
+    // The switch/port config + monitoring software are captured here now — all
+    // three (OPM, DUDE, CACTI) are compulsory before the handoff can complete.
+    const config = normalizeNocL2Config(req.body?.config);
+    if (!config || !SOFTWARE_KEYS.every((k) => config.software[k])) {
+      return res.status(400).json({
+        message: 'Complete all monitoring entries (OPM, DUDE, CACTI) before completing the handoff.',
+      });
+    }
     const data = await sm.completeL3ToL2({
       leadId: req.params.id,
       actor: actorFromReq(req),
       notes: asText(req.body?.notes),
+      config,
+      configNotes: asText(req.body?.configNotes),
     });
-    return res.json({ message: 'L3→L2 assignment recorded.', data });
+    return res.json({ message: 'Handoff completed.', data });
   } catch (error) {
     return fail(res, error);
   }
