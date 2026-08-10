@@ -13,6 +13,7 @@ const scopeToOwnHandoffs = (user) => {
 
 const withCreator = {
   createdBy: { select: { id: true, name: true } },
+  assignedSales: { select: { id: true, name: true } },
   l3ToL2AssignedTo: { select: { id: true, name: true } },
   materialReq: true,
   dispatch: true,
