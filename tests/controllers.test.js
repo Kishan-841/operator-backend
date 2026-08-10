@@ -1726,3 +1726,13 @@ test('POST /:id/noc-l3 accepts MIKROTIK snat/dynamic pools sent as arrays (multi
   assert.equal(r.status, 200, JSON.stringify(r.body));
   assert.deepEqual(r.body.data.ipAllocation.MIKROTIK[0].snatPool, ['100.64.0.0/22', '100.64.4.0/22']);
 });
+
+test('GET /api/leads?assignedSalesId= lets an admin filter by lead owner', async () => {
+  const owner = await prisma.user.findFirst({ where: { email: 'sales_user@test.local' } });
+  await createLead({ organizationName: 'Owned Co', email: `owned-${Date.now()}@x.test`, assignedSalesId: owner.id });
+  await createLead({ organizationName: 'Other Co', email: `other-${Date.now()}@x.test`, assignedSalesId: userId('ADMIN') });
+  const r = await request('GET', `/api/leads?assignedSalesId=${owner.id}`, { token: tokens.admin });
+  assert.equal(r.status, 200);
+  assert.ok(r.body.items.length >= 1);
+  assert.ok(r.body.items.every((l) => l.assignedSalesId === owner.id), 'only that owner’s leads');
+});

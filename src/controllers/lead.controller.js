@@ -489,12 +489,15 @@ export const deleteLead = async (req, res) => {
 /** GET /api/leads — search + category/status filters + pagination. */
 export const getLeads = async (req, res) => {
   try {
-    const { search, category, status } = req.query;
+    const { search, category, status, assignedSalesId } = req.query;
     const term = search ? String(search).trim() : '';
 
     const where = {
-      // Sales users see only the leads they own; admins see every lead.
-      ...(isAdmin(req.user) ? {} : { assignedSalesId: req.user.id }),
+      // Sales users see only the leads they own; admins see every lead, and may
+      // narrow to one owner via ?assignedSalesId= (used by the dashboard drill-in).
+      ...(isAdmin(req.user)
+        ? (assignedSalesId ? { assignedSalesId: String(assignedSalesId) } : {})
+        : { assignedSalesId: req.user.id }),
       ...(category && LEAD_CATEGORIES.includes(category) ? { category } : {}),
       ...(status && VALID_STATUSES.includes(status) ? { status } : {}),
       ...(term
