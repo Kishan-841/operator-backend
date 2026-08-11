@@ -68,10 +68,25 @@ test('sales: leadsCreated, winRate, and pipelineValue reflect my owned leads', a
   const res = await fetch(base + '/api/reports/my-dashboard?window=30d', { headers: { Authorization: `Bearer ${tokens.sales}` } });
   const body = await res.json();
   const kpi = (k) => body.kpis.find((x) => x.key === k);
-  assert.equal(kpi('leadsCreated').value, 4);
+  assert.equal(kpi('leadsOwned').value, 4);
   assert.equal(kpi('winRate').value, 50); // 1 won / (1 won + 1 lost)
   assert.equal(kpi('pipelineValue').value, 8000); // 5000 + 3000 (active only)
   assert.ok(body.breakdown && body.breakdown.title === 'My deal mix');
+});
+
+test('sales: leads KPI follows ownership, not creator (reassignment)', async () => {
+  const me = userId('SALES_USER');
+  const other = userId('FEASIBILITY_USER');
+  // Two leads created by someone else but assigned to me → they're mine now.
+  await createLead({ createdById: other, assignedSalesId: me, status: 'PRICING_PENDING' });
+  await createLead({ createdById: other, assignedSalesId: me, status: 'PENDING_APPROVAL' });
+  // A lead I created but reassigned away → no longer counts as mine.
+  await createLead({ createdById: me, assignedSalesId: other, status: 'PRICING_PENDING' });
+
+  const res = await fetch(base + '/api/reports/my-dashboard?window=30d', { headers: { Authorization: `Bearer ${tokens.sales}` } });
+  const body = await res.json();
+  const kpi = (k) => body.kpis.find((x) => x.key === k);
+  assert.equal(kpi('leadsOwned').value, 2); // owned, not created
 });
 
 test('feasibility: reviewsDone and feasibleRate reflect my reviews', async () => {

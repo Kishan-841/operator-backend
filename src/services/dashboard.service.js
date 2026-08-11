@@ -94,9 +94,12 @@ const salesOwnedFilter = (uid) => ({ assignedSalesId: uid });
 registerBuilder('SALES_USER', async (uid, { floor, prevFloor }) => {
   const owned = salesOwnedFilter(uid);
 
-  const leadsCreatedValue = await prisma.lead.count({ where: { createdById: uid, ...(floor ? { createdAt: { gte: floor } } : {}) } });
-  const leadsCreatedDelta = floor
-    ? leadsCreatedValue - (await prisma.lead.count({ where: { createdById: uid, createdAt: { gte: prevFloor, lt: floor } } }))
+  // Count leads I *own* (assignedSalesId), not leads I created — a reassigned
+  // lead is fully the new owner's, so it must count on their dashboard just as
+  // it already shows in their Leads list.
+  const leadsOwnedValue = await prisma.lead.count({ where: { ...owned, ...(floor ? { createdAt: { gte: floor } } : {}) } });
+  const leadsOwnedDelta = floor
+    ? leadsOwnedValue - (await prisma.lead.count({ where: { ...owned, createdAt: { gte: prevFloor, lt: floor } } }))
     : undefined;
 
   // win rate over my owned leads decided in-window — filter the log by the
@@ -131,7 +134,7 @@ registerBuilder('SALES_USER', async (uid, { floor, prevFloor }) => {
 
   return {
     kpis: [
-      { key: 'leadsCreated', label: 'Leads created', value: leadsCreatedValue, format: 'int', delta: leadsCreatedDelta },
+      { key: 'leadsOwned', label: 'My leads', value: leadsOwnedValue, format: 'int', delta: leadsOwnedDelta },
       { key: 'winRate', label: 'Win rate', value: winRate, format: 'percent', hint: `${won} won · ${lost} lost` },
       { key: 'pipelineValue', label: 'Pipeline value', value: pipelineValue, format: 'currencyPerMonth', hint: `${active.length} active deals` },
       { key: 'avgToApproval', label: 'Avg → approval', value: avgToApproval, format: 'days' },
