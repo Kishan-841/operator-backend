@@ -22,7 +22,7 @@ const SW = 'SOFTWARE_USER';
 const GROUPS = [
   { fields: ['contactPersonName', 'phone', 'whatsappNumber', 'website', 'gender'], roles: [S, F, D, SW] },
   {
-    fields: ['areaName', 'city', 'state', 'pincode', 'latitude', 'longitude', 'territory', 'popLocationId', 'popLocation'],
+    fields: ['areaName', 'area', 'city', 'state', 'pincode', 'latitude', 'longitude', 'territory', 'popLocationId', 'popLocation'],
     roles: [S, F, D, ST, L2, L3],
   },
   { fields: ['email', 'existingServiceProvider', 'annualRevenue'], roles: [S, F, L2, L3, SW] },

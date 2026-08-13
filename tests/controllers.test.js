@@ -185,6 +185,22 @@ test('POST /api/leads (sales, valid) → 201 with a generated lead number', asyn
   assert.equal(r.body.data.status, 'NEW');
 });
 
+test('POST + PUT /api/leads persists the new area (area-name) field', async () => {
+  const create = await request('POST', '/api/leads', {
+    token: tokens.sales,
+    body: { ...validLead(), area: 'Andheri West' },
+  });
+  assert.equal(create.status, 201);
+  assert.equal(create.body.data.area, 'Andheri West');
+
+  const updated = await request('PUT', `/api/leads/${create.body.data.id}`, {
+    token: tokens.sales,
+    body: { ...validLead(), area: 'Bandra East' },
+  });
+  assert.equal(updated.status, 200);
+  assert.equal(updated.body.data.area, 'Bandra East');
+});
+
 test('POST /api/leads forbidden for a non-sales role → 403', async () => {
   const r = await request('POST', '/api/leads', { token: tokens.feasibility, body: validLead() });
   assert.equal(r.status, 403);

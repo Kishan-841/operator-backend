@@ -135,6 +135,7 @@ const contactBase = z.object({
   gender: optStr,
   // Location
   areaName: optStr,
+  area: optStr,
   city: optStr,
   state: optStr,
   pincode: optStr,

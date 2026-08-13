@@ -198,7 +198,8 @@ model Lead {
   landlineNumber    String? // landline; at least one of phone/landline is required
   gender            String? // 'Male' | 'Female' | 'Other'
   // Location
-  areaName     String?
+  areaName     String? // "Building name" in the UI
+  area         String? // "Area name" — locality entered at create/edit
   city         String?
   state        String?
   pincode      String?

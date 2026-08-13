@@ -18,7 +18,7 @@ import { ensureDistributorForLead } from '../services/dualEntity.service.js';
 const LEAD_DIFF_FIELDS = [
   'category', 'organizationName', 'email', 'contactPersonName', 'phone', 'territory',
   'annualRevenue', 'website', 'whatsappNumber', 'existingServiceProvider', 'gender',
-  'areaName', 'city', 'state', 'pincode', 'latitude', 'longitude', 'sourceOfLead',
+  'areaName', 'area', 'city', 'state', 'pincode', 'latitude', 'longitude', 'sourceOfLead',
   'customerInterestLevel', 'notes', 'requirementDetails',
 ];
 
