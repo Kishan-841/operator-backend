@@ -17,6 +17,7 @@ import noteRoutes from './routes/note.routes.js';
 import documentRoutes from './routes/document.routes.js';
 import pincodeRoutes from './routes/pincode.routes.js';
 import storeRoutes from './routes/store.routes.js';
+import mapRoutes from './routes/map.routes.js';
 import { skipRateLimit } from './utils/rateLimit.js';
 
 // The configured Express app, with no server/socket/listen concerns — so it can
@@ -62,6 +63,7 @@ app.use('/api/notes', noteRoutes);
 app.use('/api/documents', documentRoutes);
 app.use('/api/pincodes', pincodeRoutes);
 app.use('/api/store', storeRoutes);
+app.use('/api/map', mapRoutes);
 
 // 404 + JSON error handler (envelopes per CLAUDE.md §9).
 app.use((_req, res) => res.status(404).json({ message: 'Not found.' }));
