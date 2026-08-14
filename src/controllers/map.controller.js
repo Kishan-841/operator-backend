@@ -16,6 +16,23 @@ export const mapProgress = (status) => {
   return 'IN_PROGRESS'; // pushed ahead: feasibility through client handover
 };
 
+/** GET /api/map/pops — every POP location with valid coordinates (admin only). */
+export const getMapPops = async (_req, res) => {
+  try {
+    const pops = await prisma.popLocation.findMany({
+      select: { id: true, name: true, latitude: true, longitude: true },
+      orderBy: { name: 'asc' },
+    });
+    const items = pops.filter(
+      (p) => validLat(p.latitude) && validLng(p.longitude) && !isZeroZero(p.latitude, p.longitude),
+    );
+    return res.json({ items });
+  } catch (error) {
+    console.error('[map.getMapPops]', error);
+    return res.status(500).json({ message: 'Failed to load POP locations.' });
+  }
+};
+
 /** GET /api/map — every map-eligible lead (admin only). */
 export const getLeadMap = async (_req, res) => {
   try {

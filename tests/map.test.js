@@ -67,6 +67,22 @@ test('GET /api/map returns only leads with valid own coordinates', async () => {
   assert.ok('leadNumber' in only && 'category' in only && 'ownerName' in only);
 });
 
+test('GET /api/map/pops requires admin and returns all POP locations', async () => {
+  await prisma.popLocation.deleteMany({});
+  await prisma.popLocation.create({ data: { name: 'Andheri POP', latitude: 19.1197, longitude: 72.8464 } });
+  await prisma.popLocation.create({ data: { name: 'Pune POP', latitude: 18.5204, longitude: 73.8567 } });
+
+  const forbidden = await request('GET', '/api/map/pops', { token: tokens.sales });
+  assert.equal(forbidden.status, 403);
+
+  const r = await request('GET', '/api/map/pops', { token: tokens.admin });
+  assert.equal(r.status, 200);
+  const names = r.body.items.map((p) => p.name).sort();
+  assert.deepEqual(names, ['Andheri POP', 'Pune POP']);
+  assert.ok('latitude' in r.body.items[0] && 'longitude' in r.body.items[0]);
+  await prisma.popLocation.deleteMany({});
+});
+
 test('GET /api/map derives progress from canonical status', async () => {
   const coords = { latitude: 19.076, longitude: 72.8777 };
   await createLead({ organizationName: 'New lead', status: 'NEW', ...coords });
