@@ -489,8 +489,20 @@ export const deleteLead = async (req, res) => {
 /** GET /api/leads — search + category/status filters + pagination. */
 export const getLeads = async (req, res) => {
   try {
-    const { search, category, status, assignedSalesId } = req.query;
+    const { search, category, status, assignedSalesId, dateFrom, dateTo } = req.query;
     const term = search ? String(search).trim() : '';
+
+    // Created-date range (inclusive of both endpoints). dateTo is bumped to the
+    // next day and matched with `lt`, so the whole `dateTo` day is included.
+    const createdAt = {};
+    if (dateFrom) {
+      const d = new Date(dateFrom);
+      if (!Number.isNaN(d.getTime())) createdAt.gte = d;
+    }
+    if (dateTo) {
+      const d = new Date(dateTo);
+      if (!Number.isNaN(d.getTime())) createdAt.lt = new Date(d.getTime() + 24 * 60 * 60 * 1000);
+    }
 
     const where = {
       // Sales users see only the leads they own; admins see every lead, and may
@@ -500,12 +512,16 @@ export const getLeads = async (req, res) => {
         : { assignedSalesId: req.user.id }),
       ...(category && LEAD_CATEGORIES.includes(category) ? { category } : {}),
       ...(status && VALID_STATUSES.includes(status) ? { status } : {}),
+      ...(Object.keys(createdAt).length ? { createdAt } : {}),
       ...(term
         ? {
             OR: [
               { leadNumber: { contains: term, mode: 'insensitive' } },
               { organizationName: { contains: term, mode: 'insensitive' } },
               { email: { contains: term, mode: 'insensitive' } },
+              { area: { contains: term, mode: 'insensitive' } },
+              { pincode: { contains: term, mode: 'insensitive' } },
+              { phone: { contains: term, mode: 'insensitive' } },
             ],
           }
         : {}),

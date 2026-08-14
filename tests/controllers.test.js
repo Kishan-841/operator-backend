@@ -185,6 +185,30 @@ test('POST /api/leads (sales, valid) → 201 with a generated lead number', asyn
   assert.equal(r.body.data.status, 'NEW');
 });
 
+test('GET /api/leads search matches area, pincode and mobile', async () => {
+  const me = userId('SALES_USER');
+  await createLead({ assignedSalesId: me, organizationName: 'Zeta', area: 'Hinjewadi', pincode: '411057', phone: '9998887770', email: 'zeta@x.test' });
+  await createLead({ assignedSalesId: me, organizationName: 'Other', area: 'Baner', pincode: '411045', phone: '9111111111', email: 'other@x.test' });
+
+  const byArea = await request('GET', '/api/leads?search=Hinjewadi', { token: tokens.sales });
+  assert.deepEqual(byArea.body.items.map((i) => i.organizationName), ['Zeta']);
+  const byPin = await request('GET', '/api/leads?search=411057', { token: tokens.sales });
+  assert.deepEqual(byPin.body.items.map((i) => i.organizationName), ['Zeta']);
+  const byMobile = await request('GET', '/api/leads?search=9998887770', { token: tokens.sales });
+  assert.deepEqual(byMobile.body.items.map((i) => i.organizationName), ['Zeta']);
+});
+
+test('GET /api/leads filters by created date range (inclusive)', async () => {
+  const me = userId('SALES_USER');
+  await createLead({ assignedSalesId: me, organizationName: 'Old', email: 'old@x.test', phone: '9000000001', createdAt: new Date('2020-01-01T00:00:00Z') });
+  await createLead({ assignedSalesId: me, organizationName: 'Mid', email: 'mid@x.test', phone: '9000000002', createdAt: new Date('2026-06-15T10:00:00Z') });
+  await createLead({ assignedSalesId: me, organizationName: 'End', email: 'end@x.test', phone: '9000000003', createdAt: new Date('2026-06-30T18:00:00Z') });
+  await createLead({ assignedSalesId: me, organizationName: 'New', email: 'new@x.test', phone: '9000000004', createdAt: new Date('2026-08-14T00:00:00Z') });
+
+  const r = await request('GET', '/api/leads?dateFrom=2026-06-01&dateTo=2026-06-30', { token: tokens.sales });
+  assert.deepEqual(r.body.items.map((i) => i.organizationName).sort(), ['End', 'Mid']);
+});
+
 test('POST + PUT /api/leads persists the new area (area-name) field', async () => {
   const create = await request('POST', '/api/leads', {
     token: tokens.sales,
