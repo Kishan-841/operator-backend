@@ -849,15 +849,18 @@ test('store queue rows are minimal — no contact, pricing, or requirement detai
   assert.equal(l.city !== undefined, true, 'dispatch destination stays visible');
 });
 
-test('NOC L2 queue rows keep network data but hide money and portal creds', async () => {
+test('NOC L2 queue rows keep network data + portal creds but hide money', async () => {
   await fullLead({ status: 'NOC_L2_PENDING' });
   const r = await request('GET', '/api/leads/nocl2/queue', { token: tokens.nocL2 });
   const l = r.body.items[0];
   assert.deepEqual(l.ipDetails.entries[0].ipv4, ['203.0.113.0/24'], 'network details visible');
   assert.equal(l.nocL2Config.configType, 'PORT');
   assert.equal(l.ipAllocation.subnet, '10.1.1.0/24');
+  // Software/portal details are now visible to NOC (they configure after provisioning).
+  assert.equal(l.portalUsername, 'viz-co', 'portal username visible to NOC L2');
+  assert.equal(l.portalPassword, 'super-secret', 'portal password visible to NOC L2');
+  // Money stays hidden.
   assert.equal(l.pricing, undefined);
-  assert.equal(l.portalPassword, undefined);
   assert.equal(l.requirementDetails.bankDetails, undefined);
 });
 

@@ -48,8 +48,10 @@ const GROUPS = [
   { fields: ['nocL2ConfigNotes', 'nocL2Config', 'nocL2AssignedToId', 'nocL2AssignedTo'], roles: [L2, L3] },
   { fields: ['aggregatorType', 'aggregatorTypes', 'aggregatorSelections', 'aggregatorConfirmRemark'], roles: [S, L2, L3, SW] },
   {
+    // NOC L2/L3 configure the network after the software team provisions the
+    // portal, so they need the software/portal details on the lead.
     fields: ['portalManagedBy', 'portalUrl', 'portalUsername', 'portalPassword', 'ipPoolNoticeAt', 'softwareAssignedToId', 'softwareAssignedTo'],
-    roles: [S, SW],
+    roles: [S, L2, L3, SW],
   },
   { fields: ['ipAllocation', 'bngConfigDoneAt', 'nocL3AssignedToId', 'nocL3AssignedTo'], roles: [L2, L3] },
   {
