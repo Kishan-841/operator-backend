@@ -1762,12 +1762,37 @@ test('POST /:id/noc-l3 accepts MIKROTIK snat/dynamic pools sent as arrays (multi
     body: {
       MIKROTIK: [{
         mikrotikIdentity: 'mk-core-01', mikrotikIp: '10.0.0.2', mikrotikGateway: '10.0.0.1',
-        snatPool: ['100.64.0.0/22', '100.64.4.0/22'], dynamicPool: ['10.10.0.0/16'], vlan: '100',
+        snatPool: ['100.64.0.0/22', '100.64.4.0/22'], dynamicPool: ['10.10.0.0/16'],
+        subnetMask: '10.0.0.0/29', vlan: '100',
       }],
     },
   });
   assert.equal(r.status, 200, JSON.stringify(r.body));
   assert.deepEqual(r.body.data.ipAllocation.MIKROTIK[0].snatPool, ['100.64.0.0/22', '100.64.4.0/22']);
+});
+
+test('POST /:id/noc-l3 requires the subnet mask (SM) and persists the CIDR', async () => {
+  const nocL3 = await login('NOC_L3_USER');
+  const mk = () => createLead({
+    status: 'NOC_L3_PENDING', category: 'PIN_RATE', requirementDetails: {},
+    aggregatorSelections: [{ type: 'MIKROTIK', quantity: 1 }],
+    aggregatorTypes: ['MIKROTIK'], aggregatorType: 'MIKROTIK',
+  });
+  const base = {
+    mikrotikIdentity: 'mk-1', mikrotikIp: '10.0.0.2', mikrotikGateway: '10.0.0.1',
+    snatPool: ['100.64.0.0/22'], dynamicPool: ['10.10.0.0/16'], vlan: '100',
+  };
+
+  const leadA = await mk();
+  const missing = await request('POST', `/api/leads/${leadA.id}/noc-l3`, { token: nocL3, body: { MIKROTIK: [{ ...base }] } });
+  assert.notEqual(missing.status, 200, 'subnet mask is required');
+
+  const leadB = await mk();
+  const ok = await request('POST', `/api/leads/${leadB.id}/noc-l3`, {
+    token: nocL3, body: { MIKROTIK: [{ ...base, subnetMask: '10.0.0.0/29' }] },
+  });
+  assert.equal(ok.status, 200, JSON.stringify(ok.body));
+  assert.equal(ok.body.data.ipAllocation.MIKROTIK[0].subnetMask, '10.0.0.0/29');
 });
 
 test('GET /api/leads?assignedSalesId= lets an admin filter by lead owner', async () => {
