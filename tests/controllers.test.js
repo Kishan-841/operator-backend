@@ -1628,6 +1628,94 @@ test('bulk-imported ISP leads carry no distributor', async () => {
   assert.equal(lead.distributorId, null);
 });
 
+// ── Bulk import: Distributor column resolution ───────────────────────────────
+// Distributor.name isn't unique, so the map mirrors owner resolution: unknown OR
+// ambiguous names fall back to the GAZON default and are counted, never failed.
+const makeDistributor = (name) => prisma.distributor.create({ data: { name } });
+const defaultDistributorId = async () =>
+  (await prisma.distributor.findFirst({ where: { isDefault: true }, select: { id: true } })).id;
+
+test('bulk import files a lead under the distributor named in the Distributor column', async () => {
+  // Unique name per run — distributors aren't cleaned between runs, and a
+  // repeated name would (correctly) read as ambiguous.
+  const name = `Nagpur Networks ${Date.now()}`;
+  const dist = await makeDistributor(name);
+  const r = await request('POST', '/api/leads/bulk', {
+    token: tokens.admin,
+    body: { rows: [pinRow({ email: 'dist-a@acme.test', whatsappNumber: '9994440001', phone: '9994440002', _distributorName: name })] },
+  });
+  assert.equal(r.body.created, 1);
+  assert.equal(r.body.distributorUnmatched, 0);
+  const lead = await prisma.lead.findFirst({ where: { email: 'dist-a@acme.test' }, select: { distributorId: true } });
+  assert.equal(lead.distributorId, dist.id);
+});
+
+test('bulk import matches the distributor name case-insensitively and trimmed', async () => {
+  const name = `Pune Uplink ${Date.now()}`;
+  const dist = await makeDistributor(name);
+  const r = await request('POST', '/api/leads/bulk', {
+    token: tokens.admin,
+    body: { rows: [pinRow({ email: 'dist-ci@acme.test', whatsappNumber: '9994440011', phone: '9994440012', _distributorName: `  ${name.toUpperCase()} ` })] },
+  });
+  assert.equal(r.body.distributorUnmatched, 0);
+  const lead = await prisma.lead.findFirst({ where: { email: 'dist-ci@acme.test' }, select: { distributorId: true } });
+  assert.equal(lead.distributorId, dist.id);
+});
+
+test('a distributor name matching nothing falls back to GAZON and is counted', async () => {
+  const r = await request('POST', '/api/leads/bulk', {
+    token: tokens.admin,
+    body: { rows: [pinRow({ email: 'dist-none@acme.test', whatsappNumber: '9994440021', phone: '9994440022', _distributorName: 'No Such Distributor' })] },
+  });
+  assert.equal(r.body.created, 1);
+  assert.equal(r.body.distributorUnmatched, 1);
+  const lead = await prisma.lead.findFirst({ where: { email: 'dist-none@acme.test' }, select: { distributorId: true } });
+  assert.equal(lead.distributorId, await defaultDistributorId());
+});
+
+test('a blank distributor cell is not counted as unmatched (defaults to GAZON)', async () => {
+  const r = await request('POST', '/api/leads/bulk', {
+    token: tokens.admin,
+    body: { rows: [pinRow({ email: 'dist-blank@acme.test', whatsappNumber: '9994440031', phone: '9994440032', _distributorName: '' })] },
+  });
+  assert.equal(r.body.created, 1);
+  assert.equal(r.body.distributorUnmatched, 0);
+  const lead = await prisma.lead.findFirst({ where: { email: 'dist-blank@acme.test' }, select: { distributorId: true } });
+  assert.equal(lead.distributorId, await defaultDistributorId());
+});
+
+test('a distributor name shared by two distributors is ambiguous → GAZON, counted', async () => {
+  const name = `Twin Distributors ${Date.now()}`;
+  await makeDistributor(name);
+  await makeDistributor(name);
+  const r = await request('POST', '/api/leads/bulk', {
+    token: tokens.admin,
+    body: { rows: [pinRow({ email: 'dist-amb@acme.test', whatsappNumber: '9994440041', phone: '9994440042', _distributorName: name })] },
+  });
+  assert.equal(r.body.distributorUnmatched, 1);
+  const lead = await prisma.lead.findFirst({ where: { email: 'dist-amb@acme.test' }, select: { distributorId: true } });
+  assert.equal(lead.distributorId, await defaultDistributorId());
+});
+
+test('an ISP row ignores the Distributor column entirely and is not counted', async () => {
+  const name = `Ignored For ISP ${Date.now()}`;
+  await makeDistributor(name);
+  const email = `isp-dist-${Date.now()}@acme.test`;
+  const r = await request('POST', '/api/leads/bulk', {
+    token: tokens.admin,
+    body: { rows: [{
+      _sheet: 'ISP', _row: 2, category: 'ISP', _distributorName: name,
+      organizationName: 'ISP Ignores Distributor', email,
+      whatsappNumber: '9994440051', phone: '9994440052',
+      requirementDetails: { bandwidthMix: ['ILL'], bandwidthSpecs: { ILL: { value: 100, unit: 'MB' } } },
+    }] },
+  });
+  assert.equal(r.body.created, 1);
+  assert.equal(r.body.distributorUnmatched, 0);
+  const lead = await prisma.lead.findFirst({ where: { email }, select: { distributorId: true } });
+  assert.equal(lead.distributorId, null);
+});
+
 // ── Refresh-token sessions ───────────────────────────────────────────────────
 test('login returns an access token and a refresh token', async () => {
   const r = await request('POST', '/api/auth/login', {

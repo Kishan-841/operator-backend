@@ -250,7 +250,9 @@ export const createLead = async (req, res) => {
  * file, by email/phone) are skipped, and the rest are created at NEW status owned
  * by the uploading admin. No feasibility push — leads stay NEW until acted on.
  * Returns { created, skipped, errors: [{ sheet, row, reason }] } so one bad or
- * duplicate row never fails the batch.
+ * duplicate row never fails the batch. The optional "Owner of Lead" and
+ * "Distributor" columns are matched by name — an unknown name falls back
+ * (admin / GAZON) and is counted rather than failing the row.
  */
 // Human reason naming WHICH field collided with an existing lead (email and/or
 // mobile), plus that lead's number — so a skipped import row is never a mystery.
@@ -314,12 +316,38 @@ export const bulkCreateLeads = async (req, res) => {
       return { ownerId: ownerByName.get(key), unmatched: false };
     };
 
+    // Distributor resolution by name, same shape as owners: Distributor.name
+    // isn't unique, so a name shared by two+ distributors is ambiguous and
+    // matches nobody.
+    const distributors = await prisma.distributor.findMany({ select: { id: true, name: true } });
+    const distributorByName = new Map();
+    const ambiguousDistributors = new Set();
+    for (const d of distributors) {
+      const key = String(d.name ?? '').trim().toLowerCase();
+      if (!key) continue;
+      if (distributorByName.has(key)) ambiguousDistributors.add(key);
+      else distributorByName.set(key, d.id);
+    }
+    // Resolve a raw distributor-name cell → { distributorId, unmatched }. Blank
+    // is not a mismatch — the lead simply belongs to the GAZON default. An
+    // unknown or ambiguous name also falls back to GAZON, but is counted so the
+    // admin can see the rows worth re-checking.
+    const resolveDistributor = (rawName) => {
+      const key = String(rawName ?? '').trim().toLowerCase();
+      if (!key) return { distributorId: defaultDistributorId, unmatched: false };
+      if (ambiguousDistributors.has(key) || !distributorByName.has(key)) {
+        return { distributorId: defaultDistributorId, unmatched: true };
+      }
+      return { distributorId: distributorByName.get(key), unmatched: false };
+    };
+
     const errors = [];
     const duplicates = []; // { sheet, row, reason } — one per skipped duplicate
     const seenKeys = new Set(); // composite org|contact|email|mobile keys seen in this file
     let created = 0;
     let skipped = 0;
     let ownerUnmatched = 0;
+    let distributorUnmatched = 0;
 
     const noteDuplicate = (where, reason) => {
       duplicates.push({ ...where, reason });
@@ -351,6 +379,11 @@ export const bulkCreateLeads = async (req, res) => {
       }
 
       const owner = resolveOwner(raw['Owner of Lead'] ?? raw._ownerName);
+      // ISP leads have no distributor concept — the column is ignored for them,
+      // so a stray value never counts as a mismatch.
+      const distributor = category === 'ISP'
+        ? { distributorId: null, unmatched: false }
+        : resolveDistributor(raw.Distributor ?? raw._distributorName);
 
       try {
         await prisma.$transaction(async (tx) => {
@@ -369,8 +402,7 @@ export const bulkCreateLeads = async (req, res) => {
               category,
               requirementDetails,
               ...contact,
-              // ISP leads have no distributor concept.
-              distributorId: category === 'ISP' ? null : defaultDistributorId,
+              distributorId: distributor.distributorId,
               status: 'NEW',
               createdById: req.user.id,
               assignedSalesId: owner.ownerId,
@@ -380,6 +412,7 @@ export const bulkCreateLeads = async (req, res) => {
         if (matchKey) seenKeys.add(matchKey);
         created += 1;
         if (owner.unmatched) ownerUnmatched += 1;
+        if (distributor.unmatched) distributorUnmatched += 1;
       } catch (err) {
         if (err?.skip) noteDuplicate(where, err.reason || 'Duplicate of an existing lead.');
         else errors.push({ ...where, reason: 'Could not be saved.' });
@@ -389,12 +422,12 @@ export const bulkCreateLeads = async (req, res) => {
     await logEvent({
       action: 'LEADS_BULK_IMPORTED',
       entityType: 'Lead',
-      summary: `Imported ${created} lead(s); skipped ${skipped}; ${ownerUnmatched} without a matching owner; ${errors.length} error(s)`,
+      summary: `Imported ${created} lead(s); skipped ${skipped}; ${ownerUnmatched} without a matching owner; ${distributorUnmatched} without a matching distributor; ${errors.length} error(s)`,
       actor: actorFromReq(req),
     });
     await refreshSidebarForRoles(['SALES_USER', 'SUPER_ADMIN', 'ADMIN']);
 
-    return res.json({ created, skipped, ownerUnmatched, duplicates, errors });
+    return res.json({ created, skipped, ownerUnmatched, distributorUnmatched, duplicates, errors });
   } catch (error) {
     console.error('[lead.bulkCreateLeads]', error);
     return res.status(500).json({ message: 'Failed to import leads.' });
