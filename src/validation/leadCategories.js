@@ -26,7 +26,7 @@ const bankDetails = z.object({
 });
 
 const jv = z.object({
-  userCount: z.number().int().positive(),
+  userCount: z.number().int().min(0).optional().nullable(),
   percentageSplit: z.number().min(0).max(100),
   bankDetails,
 });
@@ -36,7 +36,7 @@ const jv = z.object({
 export const REVENUE_RATE_TYPES = ['PERCENTAGE', 'FIXED'];
 const revenueSharing = z
   .object({
-    userCount: z.number().int().positive(),
+    userCount: z.number().int().min(0).optional().nullable(),
     rateType: z.enum(REVENUE_RATE_TYPES),
     percentageSplit: z.number().min(0).max(100).optional().nullable(),
     fixedRate: z.number().positive().optional().nullable(),
