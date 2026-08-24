@@ -1398,6 +1398,8 @@ test('bulk lead import reports an invalid row with its sheet and row number', as
   assert.equal(r.body.errors.length, 1);
   assert.equal(r.body.errors[0].sheet, 'Pin Rate');
   assert.equal(r.body.errors[0].row, 7);
+  // The reason names the offending field, not just "Required".
+  assert.match(r.body.errors[0].reason, /Organization name/i);
 });
 
 test('bulk lead import is forbidden for a non-admin → 403', async () => {

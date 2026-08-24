@@ -260,6 +260,32 @@ const describeDuplicate = (dupe, { email, phone }) => {
   return `Duplicate ${fields} — already used by ${dupe.leadNumber}.`;
 };
 
+// Friendly names for the field paths a validation error can carry, so an import
+// error reads "Mobile: Enter exactly 10 digits" instead of a bare "Required".
+const IMPORT_FIELD_LABELS = {
+  category: 'Category', organizationName: 'Organization name', email: 'Email',
+  contactPersonName: 'Contact person', phone: 'Mobile', landlineNumber: 'Landline',
+  whatsappNumber: 'WhatsApp number', gender: 'Gender', website: 'Website',
+  existingServiceProvider: 'Existing ISP', annualRevenue: 'Annual revenue',
+  areaName: 'Building name', area: 'Area name', city: 'City', state: 'State',
+  pincode: 'Pincode', latitude: 'Latitude', longitude: 'Longitude', territory: 'Territory',
+  sourceOfLead: 'Source of lead', customerInterestLevel: 'Interest level', notes: 'Notes',
+  estimatedUserCount: 'Estimated user count', ratePerUser: 'Rate per user', userCount: 'User count',
+  percentageSplit: 'Percentage split', fixedRate: 'Fixed rate', rateType: 'Rate type',
+  accountName: 'Bank account name', accountNumber: 'Bank account number', ifsc: 'IFSC', bankName: 'Bank name',
+  asNumber: 'AS number', licenseNumber: 'License number', licenseCategory: 'License category',
+  bandwidthMix: 'Bandwidth mix', bandwidthSpecs: 'Bandwidth spec',
+};
+const importFieldLabel = (path = '') => {
+  const last = String(path).split('.').pop();
+  return IMPORT_FIELD_LABELS[path] || IMPORT_FIELD_LABELS[last] || last || 'Field';
+};
+// Turn a validator's [{ path, message }] into one readable, field-named line.
+const describeValidation = (errs = []) =>
+  errs.length
+    ? errs.map((e) => `${importFieldLabel(e.path)}: ${e.message}`).join('; ')
+    : 'Invalid row.';
+
 export const bulkCreateLeads = async (req, res) => {
   try {
     const rows = Array.isArray(req.body?.rows) ? req.body.rows : null;
@@ -310,7 +336,7 @@ export const bulkCreateLeads = async (req, res) => {
 
       const result = validateLeadPayload(raw);
       if (!result.ok) {
-        errors.push({ ...where, reason: result.errors[0]?.message || 'Invalid row.' });
+        errors.push({ ...where, reason: describeValidation(result.errors) });
         continue;
       }
       const { category, requirementDetails, ...contact } = result.data;
