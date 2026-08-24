@@ -173,6 +173,7 @@ const validLead = () => ({
   category: 'ISP',
   organizationName: 'Acme Telecom',
   email: 'ops@acme.test',
+  contactPersonName: 'Ravi Kumar',
   phone: '9876543210',
   whatsappNumber: '9876543210',
   requirementDetails: { bandwidthMix: ['ILL'], bandwidthSpecs: { ILL: { value: 100, unit: 'MB' } } },
@@ -254,34 +255,33 @@ test('POST /api/leads rejects a missing mobile number → 400', async () => {
   assert.equal(r.status, 400);
 });
 
-test('POST /api/leads blocks duplicates by email or mobile; rejected leads may be re-created', async () => {
+test('POST /api/leads blocks only a full identity match; same mobile alone is allowed', async () => {
   const first = await request('POST', '/api/leads', { token: tokens.sales, body: validLead() });
   assert.equal(first.status, 201);
 
-  // Same email, different mobile → 400 pointing at email.
-  const dupEmail = await request('POST', '/api/leads', {
-    token: tokens.sales,
-    body: { ...validLead(), phone: '9876500000', whatsappNumber: '9876500000' },
-  });
-  assert.equal(dupEmail.status, 400);
-  assert.ok(dupEmail.body.errors.some((e) => e.path === 'email'), 'names the email field');
-
-  // Same mobile, different email → 400 pointing at phone.
-  const dupPhone = await request('POST', '/api/leads', {
+  // Same mobile, different email → ALLOWED (same number is fine).
+  const sameMobile = await request('POST', '/api/leads', {
     token: tokens.sales,
     body: { ...validLead(), email: 'other@acme.test' },
   });
-  assert.equal(dupPhone.status, 400);
-  assert.ok(dupPhone.body.errors.some((e) => e.path === 'phone'), 'names the phone field');
+  assert.equal(sameMobile.status, 201, 'same mobile with a different email is allowed');
 
-  // Case-insensitive email match still blocks.
-  const dupCase = await request('POST', '/api/leads', {
+  // Same email, different contact person → ALLOWED (not a full match).
+  const diffContact = await request('POST', '/api/leads', {
     token: tokens.sales,
-    body: { ...validLead(), email: 'OPS@ACME.TEST', phone: '9876500002', whatsappNumber: '9876500002' },
+    body: { ...validLead(), contactPersonName: 'Someone Else', phone: '9876500000', whatsappNumber: '9876500000' },
   });
-  assert.equal(dupCase.status, 400);
+  assert.equal(diffContact.status, 201, 'differing contact person is not a duplicate');
 
-  // A REJECTED lead doesn't block re-creation.
+  // Identical org + contact + email + mobile (email case-insensitive) → 400.
+  const fullDup = await request('POST', '/api/leads', {
+    token: tokens.sales,
+    body: { ...validLead(), email: 'OPS@ACME.TEST' },
+  });
+  assert.equal(fullDup.status, 400);
+  assert.ok(fullDup.body.errors.some((e) => e.path === 'email'), 'reports the duplicate');
+
+  // A REJECTED lead doesn't block re-creation of the same identity.
   await prisma.lead.updateMany({ where: { email: 'ops@acme.test' }, data: { status: 'REJECTED' } });
   const again = await request('POST', '/api/leads', { token: tokens.sales, body: validLead() });
   assert.equal(again.status, 201);
@@ -297,17 +297,24 @@ test('two concurrent creates of the same contact → exactly one wins (no TOCTOU
   assert.equal(await prisma.lead.count({ where: { email: 'ops@acme.test', status: { not: 'REJECTED' } } }), 1);
 });
 
-test("PUT /api/leads/:id blocks updating into another lead's email/mobile (self excluded)", async () => {
+test('PUT /api/leads/:id blocks updating into another lead\'s full identity (self excluded)', async () => {
   const a = await request('POST', '/api/leads', { token: tokens.sales, body: validLead() });
   assert.equal(a.status, 201);
-  const bBody = { ...validLead(), email: 'b@acme.test', phone: '9876500001', whatsappNumber: '9876500001' };
+  const bBody = { ...validLead(), contactPersonName: 'Bob Singh', email: 'b@acme.test', phone: '9876500001', whatsappNumber: '9876500001' };
   const b = await request('POST', '/api/leads', { token: tokens.sales, body: bBody });
   assert.equal(b.status, 201);
 
-  // b takes a's email → 400
-  const clash = await request('PUT', `/api/leads/${b.body.data.id}`, {
+  // b takes a's email only → still ALLOWED (contact + mobile differ).
+  const partial = await request('PUT', `/api/leads/${b.body.data.id}`, {
     token: tokens.sales,
     body: { ...bBody, email: 'ops@acme.test' },
+  });
+  assert.equal(partial.status, 200, 'a partial match is not a duplicate');
+
+  // b becomes a's full identity (org + contact + email + mobile) → 400.
+  const clash = await request('PUT', `/api/leads/${b.body.data.id}`, {
+    token: tokens.sales,
+    body: { ...validLead() },
   });
   assert.equal(clash.status, 400);
 
@@ -1335,6 +1342,7 @@ const pinRow = (over = {}) => ({
   category: 'PIN_RATE',
   organizationName: 'Bulk Org',
   email: 'bulk1@acme.test',
+  contactPersonName: 'Bulk Contact',
   whatsappNumber: '9990000001',
   phone: '9990000002',
   requirementDetails: { estimatedUserCount: 100, ratePerUser: 40 },
@@ -1358,7 +1366,7 @@ test('bulk lead import creates valid rows at NEW status owned by the admin', asy
   assert.equal(created.assignedSalesId, userId('ADMIN'));
 });
 
-test('bulk lead import skips a row duplicating an existing lead email', async () => {
+test('bulk lead import skips a row identical to an existing lead (org+contact+email+mobile)', async () => {
   await request('POST', '/api/leads/bulk', {
     token: tokens.admin,
     body: { rows: [pinRow({ email: 'dupe@acme.test', whatsappNumber: '9992220001', phone: '9992220002' })] },
@@ -1366,7 +1374,7 @@ test('bulk lead import skips a row duplicating an existing lead email', async ()
   const r = await request('POST', '/api/leads/bulk', {
     token: tokens.admin,
     body: { rows: [
-      pinRow({ email: 'dupe@acme.test', whatsappNumber: '9992220005', phone: '9992220006' }),
+      pinRow({ email: 'dupe@acme.test', whatsappNumber: '9992220001', phone: '9992220002' }), // identical → skipped
       pinRow({ email: 'fresh@acme.test', whatsappNumber: '9992220007', phone: '9992220008' }),
     ] },
   });
@@ -1374,16 +1382,28 @@ test('bulk lead import skips a row duplicating an existing lead email', async ()
   assert.equal(r.body.skipped, 1);
 });
 
-test('bulk lead import skips a repeated email within the same file', async () => {
+test('bulk lead import skips an identical row within the same file', async () => {
   const r = await request('POST', '/api/leads/bulk', {
     token: tokens.admin,
     body: { rows: [
       pinRow({ email: 'same@acme.test', whatsappNumber: '9993330001', phone: '9993330002' }),
-      pinRow({ email: 'same@acme.test', whatsappNumber: '9993330003', phone: '9993330004' }),
+      pinRow({ email: 'same@acme.test', whatsappNumber: '9993330001', phone: '9993330002' }), // identical → skipped
     ] },
   });
   assert.equal(r.body.created, 1);
   assert.equal(r.body.skipped, 1);
+});
+
+test('bulk lead import allows the same mobile when org/contact/email differ', async () => {
+  const r = await request('POST', '/api/leads/bulk', {
+    token: tokens.admin,
+    body: { rows: [
+      pinRow({ email: 'a@acme.test', phone: '9995550001', whatsappNumber: '9995550001' }),
+      pinRow({ email: 'b@acme.test', phone: '9995550001', whatsappNumber: '9995550001', contactPersonName: 'Other Person' }),
+    ] },
+  });
+  assert.equal(r.body.created, 2, 'same mobile is fine when the rest differs');
+  assert.equal(r.body.skipped, 0);
 });
 
 test('bulk lead import reports an invalid row with its sheet and row number', async () => {
@@ -1532,12 +1552,12 @@ test('an owner name shared by two sales users is ambiguous and left unassigned',
 });
 
 // ── Bulk import: itemized duplicate reasons ──────────────────────────────────
-test('bulk import reports an in-file email repeat with the field named', async () => {
+test('bulk import reports an in-file identical repeat with sheet/row', async () => {
   const r = await request('POST', '/api/leads/bulk', {
     token: tokens.admin,
     body: { rows: [
       pinRow({ _sheet: 'Pin Rate', _row: 2, email: 'rep@acme.test', whatsappNumber: '9996660001', phone: '9996660002' }),
-      pinRow({ _sheet: 'JV', _row: 2, email: 'rep@acme.test', whatsappNumber: '9996660003', phone: '9996660004' }),
+      pinRow({ _sheet: 'JV', _row: 2, email: 'rep@acme.test', whatsappNumber: '9996660001', phone: '9996660002' }), // identical
     ] },
   });
   assert.equal(r.body.created, 1);
@@ -1547,11 +1567,11 @@ test('bulk import reports an in-file email repeat with the field named', async (
     { sheet: r.body.duplicates[0].sheet, row: r.body.duplicates[0].row },
     { sheet: 'JV', row: 2 },
   );
-  assert.match(r.body.duplicates[0].reason, /email/i);
+  assert.match(r.body.duplicates[0].reason, /identical/i);
   assert.match(r.body.duplicates[0].reason, /repeated/i);
 });
 
-test('bulk import reports an existing-lead phone duplicate with the lead number', async () => {
+test('bulk import reports an existing-lead identical duplicate with the lead number', async () => {
   await request('POST', '/api/leads/bulk', {
     token: tokens.admin,
     body: { rows: [pinRow({ email: 'first@acme.test', whatsappNumber: '9997770001', phone: '9997770002' })] },
@@ -1559,11 +1579,11 @@ test('bulk import reports an existing-lead phone duplicate with the lead number'
   const existing = await prisma.lead.findFirst({ where: { email: 'first@acme.test' }, select: { leadNumber: true } });
   const r = await request('POST', '/api/leads/bulk', {
     token: tokens.admin,
-    body: { rows: [pinRow({ _sheet: 'ISP', _row: 5, email: 'different@acme.test', whatsappNumber: '9997770009', phone: '9997770002' })] },
+    body: { rows: [pinRow({ _sheet: 'ISP', _row: 5, email: 'first@acme.test', whatsappNumber: '9997770001', phone: '9997770002' })] }, // identical to existing
   });
   assert.equal(r.body.created, 0);
   assert.equal(r.body.duplicates.length, 1);
-  assert.match(r.body.duplicates[0].reason, /mobile|phone/i);
+  assert.match(r.body.duplicates[0].reason, /identical/i);
   assert.match(r.body.duplicates[0].reason, new RegExp(existing.leadNumber));
 });
 

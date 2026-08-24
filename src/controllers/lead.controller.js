@@ -66,22 +66,31 @@ const resolveDistributorId = async (rawId) => {
 };
 
 /** POST /api/leads — create a NEW lead with an atomically-generated number. */
-// A lead is a duplicate when its email or mobile number matches an existing
-// lead. REJECTED leads don't block — a franchise turned down earlier may
-// legitimately be re-created later.
-const findDuplicateLead = async ({ email, phone }, excludeId, client = prisma) => {
-  const or = [];
-  if (email) or.push({ email: { equals: email, mode: 'insensitive' } });
-  if (phone) or.push({ phone });
-  if (!or.length) return null;
+// A lead is a duplicate ONLY when ALL of organization name, contact person,
+// mobile and email match an existing (non-REJECTED) lead. The same mobile on its
+// own is allowed — two different people/orgs may share a number. If any of the
+// four is blank, it can't be a full match, so it's allowed. REJECTED leads don't
+// block — a franchise turned down earlier may legitimately be re-created later.
+const findDuplicateLead = async ({ email, phone, organizationName, contactPersonName }, excludeId, client = prisma) => {
+  if (!email || !phone || !organizationName || !contactPersonName) return null;
   return client.lead.findFirst({
     where: {
       status: { not: 'REJECTED' },
-      OR: or,
+      email: { equals: email, mode: 'insensitive' },
+      phone,
+      organizationName: { equals: organizationName, mode: 'insensitive' },
+      contactPersonName: { equals: contactPersonName, mode: 'insensitive' },
       ...(excludeId ? { NOT: { id: excludeId } } : {}),
     },
-    select: { leadNumber: true, email: true, phone: true },
+    select: { leadNumber: true, email: true, phone: true, organizationName: true, contactPersonName: true },
   });
+};
+
+// Composite identity key for in-file dedup during bulk import — all four fields,
+// normalized. Null when any field is missing (then the row can't be a full match).
+const fullMatchKey = ({ email, phone, organizationName, contactPersonName }) => {
+  if (!email || !phone || !organizationName || !contactPersonName) return null;
+  return [organizationName, contactPersonName, email, phone].map((s) => String(s).trim().toLowerCase()).join('|');
 };
 
 // A stable 31-bit advisory-lock key for a contact identity, so concurrent
@@ -91,16 +100,9 @@ const contactLockKey = (email) => {
   return h.readInt32BE(0) & 0x7fffffff;
 };
 
-const duplicateErrors = (dupe, { email, phone }) => {
-  const errors = [];
-  if (email && dupe.email?.toLowerCase() === email.toLowerCase()) {
-    errors.push({ path: 'email', message: `A lead with this email already exists (${dupe.leadNumber}).` });
-  }
-  if (phone && dupe.phone === phone) {
-    errors.push({ path: 'phone', message: `A lead with this mobile number already exists (${dupe.leadNumber}).` });
-  }
-  return errors.length ? errors : [{ path: 'email', message: `Duplicate of lead ${dupe.leadNumber}.` }];
-};
+const duplicateErrors = (dupe) => [
+  { path: 'email', message: `An identical lead already exists — same organization, contact, mobile and email (${dupe.leadNumber}).` },
+];
 
 export const createLead = async (req, res) => {
   try {
@@ -252,13 +254,8 @@ export const createLead = async (req, res) => {
  */
 // Human reason naming WHICH field collided with an existing lead (email and/or
 // mobile), plus that lead's number — so a skipped import row is never a mystery.
-const describeDuplicate = (dupe, { email, phone }) => {
-  const parts = [];
-  if (email && dupe.email?.toLowerCase() === email.toLowerCase()) parts.push('email');
-  if (phone && dupe.phone === phone) parts.push('mobile number');
-  const fields = parts.length ? parts.join(' and ') : 'contact details';
-  return `Duplicate ${fields} — already used by ${dupe.leadNumber}.`;
-};
+const describeDuplicate = (dupe) =>
+  `Identical lead — same organization, contact, mobile and email as ${dupe.leadNumber}.`;
 
 // Friendly names for the field paths a validation error can carry, so an import
 // error reads "Mobile: Enter exactly 10 digits" instead of a bare "Required".
@@ -319,8 +316,7 @@ export const bulkCreateLeads = async (req, res) => {
 
     const errors = [];
     const duplicates = []; // { sheet, row, reason } — one per skipped duplicate
-    const seenEmails = new Set();
-    const seenPhones = new Set();
+    const seenKeys = new Set(); // composite org|contact|email|mobile keys seen in this file
     let created = 0;
     let skipped = 0;
     let ownerUnmatched = 0;
@@ -340,21 +336,17 @@ export const bulkCreateLeads = async (req, res) => {
         continue;
       }
       const { category, requirementDetails, ...contact } = result.data;
-      const emailKey = contact.email.toLowerCase();
+      const matchKey = fullMatchKey(contact);
 
-      // Duplicate — against this file first (name the field), then against
-      // existing (non-REJECTED) leads (name the field + the matched lead).
-      if (seenEmails.has(emailKey)) {
-        noteDuplicate(where, 'Duplicate email — repeated earlier in this file.');
-        continue;
-      }
-      if (contact.phone && seenPhones.has(contact.phone)) {
-        noteDuplicate(where, 'Duplicate mobile number — repeated earlier in this file.');
+      // Duplicate only on a full identity match — same org, contact, email AND
+      // mobile — first against this file, then against existing (non-REJECTED) leads.
+      if (matchKey && seenKeys.has(matchKey)) {
+        noteDuplicate(where, 'Identical lead — same organization, contact, mobile and email repeated earlier in this file.');
         continue;
       }
       const existingDupe = await findDuplicateLead(contact);
       if (existingDupe) {
-        noteDuplicate(where, describeDuplicate(existingDupe, contact));
+        noteDuplicate(where, describeDuplicate(existingDupe));
         continue;
       }
 
@@ -367,7 +359,7 @@ export const bulkCreateLeads = async (req, res) => {
           if (clash) {
             const err = new Error('duplicate');
             err.skip = true;
-            err.reason = describeDuplicate(clash, contact);
+            err.reason = describeDuplicate(clash);
             throw err;
           }
           const leadNumber = await generateLeadNumber(tx);
@@ -385,8 +377,7 @@ export const bulkCreateLeads = async (req, res) => {
             },
           });
         });
-        seenEmails.add(emailKey);
-        if (contact.phone) seenPhones.add(contact.phone);
+        if (matchKey) seenKeys.add(matchKey);
         created += 1;
         if (owner.unmatched) ownerUnmatched += 1;
       } catch (err) {
