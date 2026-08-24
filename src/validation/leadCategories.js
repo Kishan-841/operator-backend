@@ -14,7 +14,7 @@ export const LICENSE_CATEGORIES = ['A', 'B', 'C', 'VNO'];
 // user count + rate render under "Operator details" in the form, but stay in
 // requirementDetails here (CLAUDE.md §6 — no per-category columns on Lead).
 const pinRate = z.object({
-  estimatedUserCount: z.number().int().positive(),
+  estimatedUserCount: z.number().int().min(0).optional().nullable(),
   ratePerUser: z.number().positive(),
 });
 
