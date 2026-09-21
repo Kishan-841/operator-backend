@@ -20,14 +20,15 @@ const SW = 'SOFTWARE_USER';
 
 // field group → roles allowed to see it (approved visibility matrix).
 const GROUPS = [
-  { fields: ['contactPersonName', 'phone', 'whatsappNumber', 'website', 'gender'], roles: [S, F, D, SW] },
+  { fields: ['contactPersonName', 'phone', 'whatsappNumber', 'website', 'gender'], roles: [S, F, D, L2, L3, SW] },
   {
     fields: ['areaName', 'area', 'city', 'state', 'pincode', 'latitude', 'longitude', 'territory', 'popLocationId', 'popLocation'],
     roles: [S, F, D, ST, L2, L3],
   },
   { fields: ['email', 'existingServiceProvider', 'annualRevenue'], roles: [S, F, L2, L3, SW] },
-  { fields: ['sourceOfLead', 'customerInterestLevel', 'notes'], roles: [S, F] },
-  // Rates are visible to sales, software and admins only.
+  { fields: ['sourceOfLead', 'customerInterestLevel', 'notes'], roles: [S, F, L2, L3] },
+  // Rates are visible to sales, software and admins only. NOC L2/L3 see every
+  // lead detail EXCEPT price — never add them to this group or the approval one.
   { fields: ['pricing'], roles: [S, SW] },
   {
     fields: ['approvalNotes', 'pricingRevisionReason', 'pricingRevisionCount', 'approvedById', 'approvedAt', 'approvedBy'],
@@ -105,16 +106,23 @@ const stripRequirement = (details, access) => {
  */
 export const stripLeadForRole = (user, lead) => {
   if (!lead || isAdmin(user)) return lead;
-  const role = user?.role;
+  // Staff are authorized by their SET of accesses; `role` is only a label for
+  // accesses[0]. A field is visible if ANY granted access may see it.
+  const accesses = user?.accesses?.length ? user.accesses : [user?.role];
   const copy = { ...lead };
   for (const g of GROUPS) {
-    if (g.roles.includes(role)) continue;
+    if (accesses.some((a) => g.roles.includes(a))) continue;
     for (const f of g.fields) delete copy[f];
   }
   if ('requirementDetails' in copy) {
-    const stripped = stripRequirement(copy.requirementDetails, REQ_ACCESS[role] ?? 'none');
-    if (stripped === undefined) delete copy.requirementDetails;
-    else copy.requirementDetails = stripped;
+    // Union of what each access may see (each result is a subset of the blob).
+    const parts = accesses
+      .map((a) => stripRequirement(copy.requirementDetails, REQ_ACCESS[a] ?? 'none'))
+      .filter((part) => part !== undefined);
+    const whole = parts.find((part) => part === copy.requirementDetails);
+    if (whole !== undefined) copy.requirementDetails = whole;
+    else if (!parts.length) delete copy.requirementDetails;
+    else copy.requirementDetails = Object.assign({}, ...parts);
   }
   return copy;
 };
