@@ -3,6 +3,7 @@ import prisma from '../config/db.js';
 import { validatePricing } from '../validation/pricing.js';
 import { validateFeasibilityVendors, validateFiberRoutes } from '../validation/feasibilityVendors.js';
 import { stripLeadForRole } from '../utils/leadVisibility.js';
+import { validateIpDetails } from '../validation/ipDetails.js';
 import { validateMaterialReq } from '../validation/stage4.js';
 import { validateAggregator, validateIpAllocation } from '../validation/stage5.js';
 import { actorFromReq } from '../utils/requestContext.js';
@@ -297,6 +298,47 @@ export const updateFiberRoutes = async (req, res) => {
     }
     const data = await sm.updateFiberRoutes({ leadId: req.params.id, actor: actorFromReq(req), routes: result.data });
     return res.json({ message: 'Fiber routes updated.', data: stripLeadForRole(req.user, data) });
+  } catch (error) {
+    return fail(res, error);
+  }
+};
+
+/**
+ * PUT /api/leads/:id/noc-details (NOC_L3 / admin) — edit recorded NOC data at
+ * any stage. Body: any of { nocL2: { configType, notes? }, aggregator:
+ * { selections }, ipAllocation, ipDetails }. Each present section is
+ * shape-validated here; stage/recorded/consistency rules live in the state machine.
+ */
+export const updateNocDetails = async (req, res) => {
+  try {
+    const body = req.body || {};
+    const bad = (message, errors) => res.status(400).json({ message, ...(errors ? { errors } : {}) });
+    const input = {};
+    if (body.nocL2 !== undefined) {
+      const configType = body.nocL2?.configType;
+      if (!['SWITCH', 'PORT'].includes(configType)) return bad('NOC L2 config type must be SWITCH or PORT.');
+      input.nocL2 = { configType, ...('notes' in (body.nocL2 || {}) ? { notes: asText(body.nocL2.notes) } : {}) };
+    }
+    if (body.aggregator !== undefined) {
+      const result = validateAggregator(body.aggregator || {});
+      if (!result.ok) return bad('Invalid aggregator selection.', result.errors);
+      input.aggregator = { selections: result.data.selections };
+    }
+    if (body.ipAllocation !== undefined) {
+      const result = validateIpAllocation(body.ipAllocation);
+      if (!result.ok) return bad('Invalid IP allocation.', result.errors);
+      input.ipAllocation = result.data;
+    }
+    if (body.ipDetails !== undefined) {
+      if (body.ipDetails === null) input.ipDetails = null;
+      else {
+        const result = validateIpDetails(body.ipDetails);
+        if (!result.ok) return bad('Invalid IP details.', result.errors);
+        input.ipDetails = result.data;
+      }
+    }
+    const data = await sm.updateNocDetails({ leadId: req.params.id, actor: actorFromReq(req), ...input });
+    return res.json({ message: 'NOC details updated.', data: stripLeadForRole(req.user, data) });
   } catch (error) {
     return fail(res, error);
   }

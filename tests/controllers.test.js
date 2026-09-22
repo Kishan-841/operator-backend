@@ -908,6 +908,51 @@ test('GET /feasibility/reviewed lists every lead past feasibility, any stage, st
   assert.equal(noc.status, 403);
 });
 
+// ── NOC details: NOC L3 + admin edit recorded NOC data at any stage ─────────
+test('PUT /:id/noc-details: NOC L3 edits a completed lead; sales/NOC L2 cannot; bad input 400', async () => {
+  const lead = await fullLead({
+    status: 'COMPLETED',
+    nocL2Config: { configType: 'SWITCH' },
+    ipDetails: { entries: [{ type: 'GAZON', ipv4: ['203.0.113.0/29'] }] },
+  });
+  const ok = await request('PUT', `/api/leads/${lead.id}/noc-details`, {
+    token: tokens.nocL3,
+    body: { nocL2: { configType: 'PORT', notes: 'port 7' } },
+  });
+  assert.equal(ok.status, 200);
+  assert.equal(ok.body.data.nocL2Config.configType, 'PORT');
+  assert.equal(ok.body.data.pricing, undefined, 'response stripped for NOC L3');
+
+  for (const token of [tokens.sales, tokens.nocL2]) {
+    const r = await request('PUT', `/api/leads/${lead.id}/noc-details`, { token, body: { nocL2: { configType: 'PORT' } } });
+    assert.equal(r.status, 403);
+  }
+  const bad = await request('PUT', `/api/leads/${lead.id}/noc-details`, {
+    token: tokens.nocL3,
+    body: { ipDetails: { entries: [{ type: 'ISP', irinnEmail: 'not-an-email' }] } },
+  });
+  assert.equal(bad.status, 400);
+  const badType = await request('PUT', `/api/leads/${lead.id}/noc-details`, {
+    token: tokens.nocL3,
+    body: { nocL2: { configType: 'ROUTER' } },
+  });
+  assert.equal(badType.status, 400);
+});
+
+test('GET /nocl3/records lists leads with any recorded NOC data, any stage', async () => {
+  await createLead({ status: 'COMPLETED', organizationName: 'L2 Co', nocL2Config: { configType: 'SWITCH' } });
+  await createLead({ status: 'SOFTWARE_PENDING', organizationName: 'Agg Co', aggregatorType: 'BNG' });
+  await createLead({ status: 'DOCS_UPLOADED', organizationName: 'Ip Co', ipDetails: { entries: [{ type: 'GAZON' }] } });
+  await createLead({ status: 'PRICING_PENDING', organizationName: 'None Co' });
+  const r = await request('GET', '/api/leads/nocl3/records', { token: tokens.nocL3 });
+  assert.equal(r.status, 200);
+  assert.deepEqual(r.body.items.map((l) => l.organizationName).sort(), ['Agg Co', 'Ip Co', 'L2 Co']);
+  const search = await request('GET', '/api/leads/nocl3/records?search=agg', { token: tokens.nocL3 });
+  assert.deepEqual(search.body.items.map((l) => l.organizationName), ['Agg Co']);
+  const noc2 = await request('GET', '/api/leads/nocl3/records', { token: tokens.nocL2 });
+  assert.equal(noc2.status, 403);
+});
+
 test('store queue rows are minimal — no contact, pricing, or requirement details', async () => {
   await fullLead({ status: 'AWAITING_DISPATCH' });
   const store = await login('STORE_USER');

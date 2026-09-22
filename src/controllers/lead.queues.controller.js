@@ -1,3 +1,4 @@
+import { Prisma } from '@prisma/client';
 import prisma from '../config/db.js';
 import { parsePagination, paginatedResponse } from '../utils/pagination.js';
 import { salesOwnerScope } from '../utils/leadAccess.js';
@@ -70,6 +71,22 @@ const queueFor = (status, extraWhere) => async (req, res) => {
 };
 
 export const feasibilityQueue = queueFor('FEASIBILITY_PENDING');
+// Every lead with any recorded NOC data (L2 config, aggregator, IP allocation,
+// IP details), at any stage — NOC L3's entry point for editing NOC details.
+// Wrapped in AND so it can't collide with the search term's OR.
+export const nocRecordsQueue = queueFor(null, () => ({
+  AND: [
+    {
+      OR: [
+        { nocL2Config: { not: Prisma.DbNull } },
+        { ipAllocation: { not: Prisma.DbNull } },
+        { ipDetails: { not: Prisma.DbNull } },
+        { aggregatorType: { not: null } },
+        { aggregatorTypes: { isEmpty: false } },
+      ],
+    },
+  ],
+}));
 // Every lead that has passed feasibility, at ANY later stage (incl. completed /
 // rejected) — the feasibility team's entry point for editing fiber routes.
 export const feasibilityReviewedQueue = queueFor(null, () => ({

@@ -11,6 +11,7 @@ import { generateAgreement } from '../controllers/agreement.controller.js';
 import {
   feasibilityQueue,
   feasibilityReviewedQueue,
+  nocRecordsQueue,
   pricingQueue,
   approvalsQueue,
   docsQueue,
@@ -51,6 +52,7 @@ import {
   assignL3ToL2,
   sendBack,
   updateFiberRoutes,
+  updateNocDetails,
   completeClientHandover,
   markAgreementSentForSignature,
   verifyAgreement,
@@ -93,6 +95,7 @@ router.get('/nocl2/queue', requireRole('NOC_L2_USER'), nocL2Queue);
 router.get('/aggregator/queue', requireRole('SALES_USER'), aggregatorQueue);
 router.get('/software/queue', requireRole('SOFTWARE_USER'), softwareQueue);
 router.get('/nocl3/queue', requireRole('NOC_L3_USER'), nocL3Queue);
+router.get('/nocl3/records', requireRole('NOC_L3_USER'), nocRecordsQueue);
 router.get('/l3-to-l2/queue', requireRole('NOC_L2_USER', 'NOC_L3_USER'), l3ToL2Queue);
 router.get('/client-handover/queue', requireRole('SALES_USER'), clientHandoverQueue);
 router.get('/agreement/queue', requireRole('SOFTWARE_USER'), agreementQueue);
@@ -147,6 +150,8 @@ router.post('/:id/l3-to-l2/assign', requireRole('NOC_L3_USER'), assignL3ToL2);
 router.post('/:id/send-back', requireRole('NOC_L2_USER', 'NOC_L3_USER'), sendBack);
 // Fiber routes stay editable by feasibility/admin at any stage after feasibility.
 router.put('/:id/fiber-routes', requireRole('FEASIBILITY_USER'), updateFiberRoutes);
+// NOC details stay editable by NOC L3/admin at any stage once recorded.
+router.put('/:id/noc-details', requireRole('NOC_L3_USER'), updateNocDetails);
 router.post(
   '/:id/agreement/generate',
   requireRole('SOFTWARE_USER', 'SALES_USER'),

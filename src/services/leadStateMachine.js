@@ -875,14 +875,37 @@ export const completeNocL2 = ({ leadId, actor, config, notes }) =>
 // Stage 10: sales confirms one or more aggregators (each with a quantity) →
 // software. Custom types (anything beyond the built-ins) are registered in the
 // shared AggregatorType master on first use.
-export const confirmAggregator = async ({ leadId, actor, selections, remark }) => {
-  const { category } = await loadLead(leadId);
+// Aggregator selections must be non-empty, and BGP is an ISP-only option
+// (everything else applies to every category). Shared by stage 10 + NOC edits.
+const assertAggregatorSelections = (category, selections) => {
   const list = Array.isArray(selections) ? selections : [];
   if (!list.length) throw httpError(400, 'Select at least one aggregator type.');
-  // BGP is an ISP-only aggregator option; everything else applies to every category.
   if (category !== 'ISP' && list.some((s) => s.type === 'BGP')) {
     throw httpError(400, 'BGP is available only for ISP leads.');
   }
+  return list;
+};
+
+// Register custom aggregator names in the shared master list. Soft-fail
+// (CLAUDE.md §9): a master-write error must never roll back the business write.
+const registerCustomAggregators = async (list, actor) => {
+  for (const s of list) {
+    if (KNOWN_AGGREGATORS.includes(s.type)) continue;
+    try {
+      await prisma.aggregatorType.upsert({
+        where: { name: s.type },
+        update: {},
+        create: { name: s.type, createdById: actor.id },
+      });
+    } catch (e) {
+      console.warn('[aggregatorType.upsert] non-fatal:', e?.message);
+    }
+  }
+};
+
+export const confirmAggregator = async ({ leadId, actor, selections, remark }) => {
+  const { category } = await loadLead(leadId);
+  const list = assertAggregatorSelections(category, selections);
   const types = list.map((s) => s.type);
   const updated = await advance({
     leadId,
@@ -904,20 +927,8 @@ export const confirmAggregator = async ({ leadId, actor, selections, remark }) =
     ownerOnly: true,
   });
   // Register custom names only AFTER the transition landed — a stale 409'd
-  // confirm must not write to the shared master list. Soft-fail (CLAUDE.md §9):
-  // a master-write error must never roll back the confirm itself.
-  for (const s of list) {
-    if (KNOWN_AGGREGATORS.includes(s.type)) continue;
-    try {
-      await prisma.aggregatorType.upsert({
-        where: { name: s.type },
-        update: {},
-        create: { name: s.type, createdById: actor.id },
-      });
-    } catch (e) {
-      console.warn('[aggregatorType.upsert] non-fatal:', e?.message);
-    }
-  }
+  // confirm must not write to the shared master list.
+  await registerCustomAggregators(list, actor);
   return updated;
 };
 
@@ -967,11 +978,34 @@ export const completeNocL3 = async ({ leadId, actor, ipAllocation }) => {
   if (lead.status !== 'NOC_L3_PENDING') {
     throw httpError(409, 'This lead is no longer awaiting NOC L3 — someone already completed it.');
   }
-  // Selections → types-array (qty 1 each) → single legacy column → Mikrotik.
-  const selections = Array.isArray(lead.aggregatorSelections) && lead.aggregatorSelections.length
+  const stored = buildIpAllocation(aggregatorSelectionsOf(lead), ipAllocation);
+  return advance({
+    leadId,
+    actor,
+    from: 'NOC_L3_PENDING',
+    to: 'L3_TO_L2_HANDOFF',
+    data: { nocL3AssignedToId: actor.id, ipAllocation: stored, bngConfigDoneAt: new Date() },
+    // The next action is NOC L3 ASSIGNING this handoff to a specific L2 user
+    // (assignL3ToL2 then notifies that individual). Notify NOC L3, not L2 —
+    // no L2 user can see the handoff until it's assigned to them.
+    notifyRole: 'NOC_L3_USER',
+    notifyTitle: 'ready to assign L3→L2 handoff',
+    outgoing: ['NOC_L3_USER'],
+  });
+};
+
+// A lead's aggregator selections: selections → types-array (qty 1 each) →
+// single legacy column → Mikrotik.
+const aggregatorSelectionsOf = (lead) =>
+  Array.isArray(lead.aggregatorSelections) && lead.aggregatorSelections.length
     ? lead.aggregatorSelections
     : (lead.aggregatorTypes?.length ? lead.aggregatorTypes : [lead.aggregatorType || 'MIKROTIK'])
         .map((type) => ({ type, quantity: 1 }));
+
+// Check an IP allocation against the aggregator selections (one complete unit
+// per quantity) and return the value to store. Throws 400 on a mismatch.
+// Shared by stage 12 and NOC-details edits so both enforce identical rules.
+const buildIpAllocation = (selections, ipAllocation) => {
   const alloc = ipAllocation && typeof ipAllocation === 'object' ? ipAllocation : {};
   // When a BNG-class aggregator (BNG / BIRAS) is selected, MIKROTIK configs are
   // optional — it carries the aggregation. All-or-nothing: leave MIKROTIK fully
@@ -1000,19 +1034,84 @@ export const completeNocL3 = async ({ leadId, actor, ipAllocation }) => {
       return out;
     });
   }
-  return advance({
-    leadId,
+  return stored;
+};
+
+// NOC details (L2 config, aggregator selection, IP allocation, IP details) stay
+// editable by NOC L3 + admins at ANY stage — but only sections their own stage
+// has already recorded, so this can never skip a pipeline step. Not a stage
+// transition: status is untouched. Sections arrive shape-validated from the
+// controller; `undefined` = leave alone (ipDetails may be null = clear).
+export const updateNocDetails = async ({ leadId, actor, nocL2, aggregator, ipAllocation, ipDetails }) => {
+  const lead = await loadLead(leadId);
+  if (!hasAccess(actor, 'NOC_L3_USER')) {
+    throw httpError(403, 'Only NOC L3 can edit NOC details.');
+  }
+  const changing = { nocL2, aggregator, ipAllocation, ipDetails };
+  if (Object.values(changing).every((v) => v === undefined)) {
+    throw httpError(400, 'Nothing to update.');
+  }
+  const recorded = {
+    nocL2: lead.nocL2Config != null,
+    aggregator: Boolean(
+      (Array.isArray(lead.aggregatorSelections) && lead.aggregatorSelections.length) ||
+        lead.aggregatorTypes?.length ||
+        lead.aggregatorType,
+    ),
+    ipAllocation: lead.ipAllocation != null,
+    ipDetails: lead.ipDetails != null,
+  };
+  const LABELS = { nocL2: 'NOC L2 config', aggregator: 'aggregator', ipAllocation: 'IP allocation', ipDetails: 'IP details' };
+  for (const [k, v] of Object.entries(changing)) {
+    if (v !== undefined && !recorded[k]) {
+      throw httpError(409, `The ${LABELS[k]} hasn't been recorded for this lead yet — it's captured at its own stage first.`);
+    }
+  }
+
+  const data = {};
+  if (nocL2 !== undefined) {
+    // Merge the config type onto the stored config so the stage-13 monitoring
+    // software (nocL2Config.software) survives.
+    data.nocL2Config = { ...(lead.nocL2Config || {}), configType: nocL2.configType };
+    if (nocL2.notes !== undefined) data.nocL2ConfigNotes = nocL2.notes;
+  }
+  let selections = aggregatorSelectionsOf(lead);
+  if (aggregator !== undefined) {
+    selections = assertAggregatorSelections(lead.category, aggregator.selections);
+    const types = selections.map((s) => s.type);
+    Object.assign(data, { aggregatorSelections: selections, aggregatorTypes: types, aggregatorType: types[0] });
+  }
+  if (ipAllocation !== undefined) {
+    data.ipAllocation = buildIpAllocation(selections, ipAllocation);
+  } else if (aggregator !== undefined && recorded.ipAllocation) {
+    // The recorded allocation must still fit the new selection — otherwise the
+    // caller has to send a matching allocation in the same request.
+    try {
+      buildIpAllocation(selections, lead.ipAllocation);
+    } catch {
+      throw httpError(400, 'The IP allocation no longer matches the new aggregator selection — update both together.');
+    }
+  }
+  if (ipDetails !== undefined) data.ipDetails = ipDetails ?? Prisma.DbNull;
+
+  const updated = await prisma.lead.update({ where: { id: leadId }, data, ...withCreator });
+  if (aggregator !== undefined) await registerCustomAggregators(selections, actor);
+
+  const edited = Object.keys(changing).filter((k) => changing[k] !== undefined).map((k) => LABELS[k]);
+  await addLeadNote({ leadId, stage: 'NOC_L3', body: `NOC details updated: ${edited.join(', ')}.`, actor });
+  await logEvent({
+    action: 'LEAD_UPDATED',
+    entityType: 'Lead',
+    entityId: leadId,
+    summary: `Updated NOC details on ${lead.leadNumber} (${edited.join(', ')})`,
+    changes: Object.keys(data).map((field) => ({
+      field,
+      from: lead[field] ?? null,
+      to: data[field] === Prisma.DbNull ? null : data[field],
+    })),
     actor,
-    from: 'NOC_L3_PENDING',
-    to: 'L3_TO_L2_HANDOFF',
-    data: { nocL3AssignedToId: actor.id, ipAllocation: stored, bngConfigDoneAt: new Date() },
-    // The next action is NOC L3 ASSIGNING this handoff to a specific L2 user
-    // (assignL3ToL2 then notifies that individual). Notify NOC L3, not L2 —
-    // no L2 user can see the handoff until it's assigned to them.
-    notifyRole: 'NOC_L3_USER',
-    notifyTitle: 'ready to assign L3→L2 handoff',
-    outgoing: ['NOC_L3_USER'],
   });
+  return updated;
 };
 
 // Fiber routes (Primary + Secondary/Tertiary/Fourth) stay editable by the
