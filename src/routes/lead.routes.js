@@ -10,6 +10,7 @@ import {
 import { generateAgreement } from '../controllers/agreement.controller.js';
 import {
   feasibilityQueue,
+  feasibilityReviewedQueue,
   pricingQueue,
   approvalsQueue,
   docsQueue,
@@ -49,6 +50,7 @@ import {
   completeL3ToL2,
   assignL3ToL2,
   sendBack,
+  updateFiberRoutes,
   completeClientHandover,
   markAgreementSentForSignature,
   verifyAgreement,
@@ -78,6 +80,7 @@ router.get('/duplicate-approvals', requireRole('SUPER_ADMIN', 'ADMIN'), listDupl
 router.post('/duplicate-approvals/:approvalId/approve', requireRole('SUPER_ADMIN', 'ADMIN'), approveDuplicateApproval);
 router.post('/duplicate-approvals/:approvalId/reject', requireRole('SUPER_ADMIN', 'ADMIN'), rejectDuplicateApproval);
 router.get('/feasibility/queue', requireRole('FEASIBILITY_USER'), feasibilityQueue);
+router.get('/feasibility/reviewed', requireRole('FEASIBILITY_USER'), feasibilityReviewedQueue);
 router.get('/pricing/queue', requireRole('SALES_USER'), pricingQueue);
 router.get('/approvals/queue', requireRole('SUPER_ADMIN', 'ADMIN'), approvalsQueue);
 router.get('/docs/queue', requireRole('SALES_USER'), docsQueue);
@@ -142,6 +145,8 @@ router.post('/:id/l3-to-l2/assign', requireRole('NOC_L3_USER'), assignL3ToL2);
 // Send-back is gated per-stage inside the state machine — an L3 user can't
 // bounce an L2-owned stage — so the route only has to keep non-NOC roles out.
 router.post('/:id/send-back', requireRole('NOC_L2_USER', 'NOC_L3_USER'), sendBack);
+// Fiber routes stay editable by feasibility/admin at any stage after feasibility.
+router.put('/:id/fiber-routes', requireRole('FEASIBILITY_USER'), updateFiberRoutes);
 router.post(
   '/:id/agreement/generate',
   requireRole('SOFTWARE_USER', 'SALES_USER'),

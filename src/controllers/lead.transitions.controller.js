@@ -1,7 +1,8 @@
 import * as sm from '../services/leadStateMachine.js';
 import prisma from '../config/db.js';
 import { validatePricing } from '../validation/pricing.js';
-import { validateFeasibilityVendors } from '../validation/feasibilityVendors.js';
+import { validateFeasibilityVendors, validateFiberRoutes } from '../validation/feasibilityVendors.js';
+import { stripLeadForRole } from '../utils/leadVisibility.js';
 import { validateMaterialReq } from '../validation/stage4.js';
 import { validateAggregator, validateIpAllocation } from '../validation/stage5.js';
 import { actorFromReq } from '../utils/requestContext.js';
@@ -38,21 +39,22 @@ const parseCoord = (v, max) => {
 
 export const completeFeasibility = async (req, res) => {
   try {
-    const { feasible, notes, vendors, popLocationId, networkType } = req.body || {};
+    const { feasible, notes, vendors, routes, popLocationId, networkType } = req.body || {};
     if (typeof feasible !== 'boolean') {
       return res.status(400).json({ message: 'feasible (boolean) is required.' });
     }
     if (networkType != null && !['ON_NET', 'OFF_NET'].includes(networkType)) {
       return res.status(400).json({ message: 'networkType must be ON_NET or OFF_NET.' });
     }
-    // On the feasible path, validate the fiber segment list (Own Network / vendors).
-    let segments;
+    // On the feasible path, validate the fiber routes (Primary + optional
+    // backups). Legacy clients send a flat `vendors` list = the Primary route.
+    let fiberRoutes;
     if (feasible) {
-      const result = validateFeasibilityVendors(vendors);
+      const result = routes !== undefined ? validateFiberRoutes(routes) : validateFeasibilityVendors(vendors);
       if (!result.ok) {
         return res.status(400).json({ message: 'Validation failed.', errors: result.errors });
       }
-      segments = result.data;
+      fiberRoutes = routes !== undefined ? result.data : { PRIMARY: result.data };
     }
     const latitude = parseCoord(req.body?.latitude, 90);
     const longitude = parseCoord(req.body?.longitude, 180);
@@ -101,7 +103,7 @@ export const completeFeasibility = async (req, res) => {
       actor: actorFromReq(req),
       feasible,
       notes: asText(notes),
-      vendors: segments,
+      routes: fiberRoutes,
       popIds,
       latitude,
       longitude,
@@ -281,6 +283,20 @@ export const completeNocL2 = async (req, res) => {
       notes: asText(req.body?.configNotes ?? req.body?.notes),
     });
     return res.json({ message: 'NOC L2 config recorded.', data });
+  } catch (error) {
+    return fail(res, error);
+  }
+};
+
+/** PUT /api/leads/:id/fiber-routes (FEASIBILITY_USER / admin) { routes } — edit at any stage. */
+export const updateFiberRoutes = async (req, res) => {
+  try {
+    const result = validateFiberRoutes(req.body?.routes);
+    if (!result.ok) {
+      return res.status(400).json({ message: 'Validation failed.', errors: result.errors });
+    }
+    const data = await sm.updateFiberRoutes({ leadId: req.params.id, actor: actorFromReq(req), routes: result.data });
+    return res.json({ message: 'Fiber routes updated.', data: stripLeadForRole(req.user, data) });
   } catch (error) {
     return fail(res, error);
   }

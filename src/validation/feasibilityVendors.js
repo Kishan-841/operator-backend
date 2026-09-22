@@ -53,3 +53,33 @@ export const validateFeasibilityVendors = (input) => {
   }
   return { ok: true, data: result.data };
 };
+
+// Fiber routes: PRIMARY (required, ≥1 segment — stored in feasibilityVendors)
+// plus up to three optional backup routes (stored in feasibilityBackupRoutes).
+export const BACKUP_ROUTE_KEYS = ['SECONDARY', 'TERTIARY', 'FOURTH'];
+
+const routesSchema = z.object(
+  {
+    PRIMARY: z.array(segmentSchema).min(1, 'Add at least one fiber segment to the Primary route.'),
+    SECONDARY: z.array(segmentSchema).default([]),
+    TERTIARY: z.array(segmentSchema).default([]),
+    FOURTH: z.array(segmentSchema).default([]),
+  },
+  { message: 'Fiber routes are required.' },
+);
+
+/**
+ * Validate the { PRIMARY, SECONDARY?, TERTIARY?, FOURTH? } route map a client
+ * submits. Missing backup routes normalise to []. Same return shape as
+ * validateFeasibilityVendors.
+ */
+export const validateFiberRoutes = (input) => {
+  const result = routesSchema.safeParse(input);
+  if (!result.success) {
+    return {
+      ok: false,
+      errors: result.error.issues.map((i) => ({ path: i.path.join('.'), message: i.message })),
+    };
+  }
+  return { ok: true, data: result.data };
+};

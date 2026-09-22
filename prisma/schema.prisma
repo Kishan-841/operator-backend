@@ -247,6 +247,10 @@ model Lead {
   // validation/feasibilityVendors.js. Shape:
   // [{ kind: 'OWN'|'VENDOR'|'CLIENT', vendorId?, vendorName?, vendorType?, clientName?, fiberMeters, path?: { a:{lat,lng}, b:{lat,lng} } }]
   feasibilityVendors      Json?
+  // Backup fiber routes — same segment shape as feasibilityVendors (which stays
+  // the PRIMARY route). Editable by feasibility/admin at any stage. Shape:
+  // { SECONDARY: [segment], TERTIARY: [segment], FOURTH: [segment] }
+  feasibilityBackupRoutes Json?
   feasibilityReviewedAt   DateTime?
   estimatedDeliveryAt     DateTime? // set (optionally) at feasibility; shown to delivery
   // POP selected during feasibility (reusable master, see PopLocation).

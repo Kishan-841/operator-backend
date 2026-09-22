@@ -1,6 +1,6 @@
 import { Prisma } from '@prisma/client';
 import prisma from '../config/db.js';
-import { logStatusChange } from './statusChangeLog.service.js';
+import { logStatusChange, logEvent } from './statusChangeLog.service.js';
 import { addLeadNote } from './leadNote.service.js';
 import { notifyRoles, notifyOneUser, refreshSidebarForRoles } from './notification.service.js';
 import { assertLeadAccess } from '../utils/leadAccess.js';
@@ -97,14 +97,34 @@ export const submitForFeasibility = async ({ leadId, actor }) => {
   return updated;
 };
 
-// Resolve feasibility fiber segments: confirm each referenced Vendor exists and
-// snapshot its name/type into the stored JSON (so display survives later
-// renames/deletes). `segments` is the validated array from
-// validation/feasibilityVendors. Throws 400 on an empty list or missing vendor.
-const resolveVendorSegments = async (segments) => {
-  if (!Array.isArray(segments) || segments.length === 0) {
-    throw httpError(400, 'Add at least one fiber segment when marking a lead feasible.');
+const BACKUP_ROUTE_KEYS = ['SECONDARY', 'TERTIARY', 'FOURTH'];
+
+// Resolve fiber routes: confirm each referenced Vendor exists and snapshot its
+// name/type into the stored JSON (so display survives later renames/deletes).
+// `routes` is the validated { PRIMARY, SECONDARY, TERTIARY, FOURTH } map from
+// validation/feasibilityVendors. Returns the two stored columns:
+// { feasibilityVendors: PRIMARY, feasibilityBackupRoutes: { SECONDARY, … } }.
+// Throws 400 on an empty Primary or a missing vendor.
+const resolveFiberRoutes = async (routes) => {
+  const primary = routes?.PRIMARY;
+  if (!Array.isArray(primary) || primary.length === 0) {
+    throw httpError(400, 'Add at least one fiber segment to the Primary route.');
   }
+  const backups = Object.fromEntries(
+    BACKUP_ROUTE_KEYS.map((k) => [k, Array.isArray(routes[k]) ? routes[k] : []]),
+  );
+  // One vendor lookup across every route.
+  const byId = await loadVendorsFor([primary, ...Object.values(backups)].flat());
+  return {
+    feasibilityVendors: snapshotSegments(primary, byId),
+    feasibilityBackupRoutes: Object.fromEntries(
+      Object.entries(backups).map(([k, segs]) => [k, snapshotSegments(segs, byId)]),
+    ),
+  };
+};
+
+// Confirm every VENDOR segment's vendor exists; returns Map(id → vendor).
+const loadVendorsFor = async (segments) => {
   const vendorIds = [...new Set(segments.filter((s) => s.kind === 'VENDOR').map((s) => s.vendorId))];
   const found = vendorIds.length
     ? await prisma.vendor.findMany({
@@ -116,7 +136,11 @@ const resolveVendorSegments = async (segments) => {
   for (const id of vendorIds) {
     if (!byId.has(id)) throw httpError(400, 'One of the selected vendors no longer exists.');
   }
-  return segments.map((s) => {
+  return byId;
+};
+
+const snapshotSegments = (segments, byId) =>
+  segments.map((s) => {
     const base = { kind: s.kind, fiberMeters: s.fiberMeters, ...(s.path ? { path: s.path } : {}) };
     if (s.kind === 'VENDOR') {
       const v = byId.get(s.vendorId);
@@ -128,7 +152,6 @@ const resolveVendorSegments = async (segments) => {
     }
     return base;
   });
-};
 
 // Stage 2: feasibility decides. Feasible → pricing pool; not feasible → REJECTED.
 // On the feasible path the reviewer may also attach a POP and set/correct the
@@ -139,6 +162,7 @@ export const completeFeasibility = async ({
   feasible,
   notes,
   vendors,
+  routes,
   popIds = [],
   latitude,
   longitude,
@@ -169,10 +193,11 @@ export const completeFeasibility = async ({
   }
   const primaryPopId = popSnapshots[0]?.id ?? null;
 
-  // On the feasible path, resolve vendor segments: confirm each referenced
+  // On the feasible path, resolve the fiber routes: confirm each referenced
   // Vendor exists and snapshot its name/type into the stored JSON so display
-  // survives later renames/deletes.
-  const feasibilityVendors = feasible ? await resolveVendorSegments(vendors) : null;
+  // survives later renames/deletes. Legacy callers send a flat `vendors` list,
+  // which is the Primary route.
+  const fiber = feasible ? await resolveFiberRoutes(routes ?? { PRIMARY: vendors }) : null;
 
   const newStatus = feasible ? 'PRICING_PENDING' : 'REJECTED';
   const updated = await applyTransition(leadId, 'FEASIBILITY_PENDING', {
@@ -186,7 +211,7 @@ export const completeFeasibility = async ({
     // POP + coordinate edits only apply on the feasible path.
     ...(feasible
       ? {
-          feasibilityVendors,
+          ...fiber,
           feasibilityPops: popSnapshots,
           popLocationId: primaryPopId,
           ...(latitude !== undefined ? { latitude } : {}),
@@ -988,6 +1013,41 @@ export const completeNocL3 = async ({ leadId, actor, ipAllocation }) => {
     notifyTitle: 'ready to assign L3→L2 handoff',
     outgoing: ['NOC_L3_USER'],
   });
+};
+
+// Fiber routes (Primary + Secondary/Tertiary/Fourth) stay editable by the
+// feasibility team and admins at ANY stage after feasibility — including
+// COMPLETED — because routes change over a service's life (vendor swapped,
+// backup added). Not a stage transition: status is untouched, so there's no
+// status-guarded update, no notification and no sidebar refresh.
+export const updateFiberRoutes = async ({ leadId, actor, routes }) => {
+  const lead = await loadLead(leadId);
+  if (!hasAccess(actor, 'FEASIBILITY_USER')) {
+    throw httpError(403, 'Only the feasibility team can edit fiber routes.');
+  }
+  if (!lead.feasibilityReviewedAt || ['NEW', 'FEASIBILITY_PENDING'].includes(lead.status)) {
+    throw httpError(409, 'This lead has not passed feasibility yet — record fiber details from the feasibility queue.');
+  }
+  const fiber = await resolveFiberRoutes(routes);
+  const updated = await prisma.lead.update({ where: { id: leadId }, data: fiber, ...withCreator });
+
+  const counts = [
+    `Primary ${fiber.feasibilityVendors.length}`,
+    ...BACKUP_ROUTE_KEYS.map((k) => `${k[0]}${k.slice(1).toLowerCase()} ${fiber.feasibilityBackupRoutes[k].length}`),
+  ].join(', ');
+  await addLeadNote({ leadId, stage: 'FEASIBILITY', body: `Fiber routes updated (${counts} segments).`, actor });
+  await logEvent({
+    action: 'LEAD_UPDATED',
+    entityType: 'Lead',
+    entityId: leadId,
+    summary: `Updated fiber routes on ${lead.leadNumber}`,
+    changes: [
+      { field: 'feasibilityVendors', from: lead.feasibilityVendors, to: fiber.feasibilityVendors },
+      { field: 'feasibilityBackupRoutes', from: lead.feasibilityBackupRoutes, to: fiber.feasibilityBackupRoutes },
+    ],
+    actor,
+  });
+  return updated;
 };
 
 // NOC send-back: a lead can arrive in a NOC queue un-workable through no fault

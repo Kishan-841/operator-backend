@@ -37,7 +37,7 @@ const queueFor = (status, extraWhere) => async (req, res) => {
   try {
     const term = req.query.search ? String(req.query.search).trim() : '';
     const where = {
-      status: Array.isArray(status) ? { in: status } : status,
+      ...(status ? { status: Array.isArray(status) ? { in: status } : status } : {}),
       ...(extraWhere ? extraWhere(req) : {}),
       ...(term
         ? {
@@ -70,6 +70,12 @@ const queueFor = (status, extraWhere) => async (req, res) => {
 };
 
 export const feasibilityQueue = queueFor('FEASIBILITY_PENDING');
+// Every lead that has passed feasibility, at ANY later stage (incl. completed /
+// rejected) — the feasibility team's entry point for editing fiber routes.
+export const feasibilityReviewedQueue = queueFor(null, () => ({
+  feasibilityReviewedAt: { not: null },
+  status: { notIn: ['NEW', 'FEASIBILITY_PENDING'] },
+}));
 // Sales-owned queues are scoped to the acting sales user's leads (admins see all).
 export const pricingQueue = queueFor('PRICING_PENDING', (req) => salesOwnerScope(req.user));
 export const approvalsQueue = queueFor('PENDING_APPROVAL');

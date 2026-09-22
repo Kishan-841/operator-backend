@@ -37,7 +37,7 @@ const GROUPS = [
   {
     fields: [
       'feasibilityNotes', 'feasibilityNetworkType', 'feasibilityPops', 'feasibilityOffNet',
-      'feasibilityVendors', 'feasibilityReviewedAt', 'feasibilityAssignedToId', 'feasibilityAssignedTo',
+      'feasibilityVendors', 'feasibilityBackupRoutes', 'feasibilityReviewedAt', 'feasibilityAssignedToId', 'feasibilityAssignedTo',
     ],
     roles: [S, F, D, L2, L3],
   },

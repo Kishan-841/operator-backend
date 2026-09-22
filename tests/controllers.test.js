@@ -842,6 +842,72 @@ test('POST /:id/feasibility stores an optional estimated delivery date', async (
   assert.equal(bad.status, 400);
 });
 
+// ── Fiber routes: Primary/Secondary/Tertiary/Fourth, editable at any stage ──
+test('POST /:id/feasibility accepts routes (Primary + backups)', async () => {
+  const lead = await createLead({ status: 'FEASIBILITY_PENDING' });
+  const r = await request('POST', `/api/leads/${lead.id}/feasibility`, {
+    token: tokens.feasibility,
+    body: {
+      feasible: true,
+      routes: { PRIMARY: [{ kind: 'OWN', fiberMeters: 400 }], SECONDARY: [{ kind: 'OWN', fiberMeters: 700 }] },
+    },
+  });
+  assert.equal(r.status, 200);
+  assert.equal(r.body.data.feasibilityVendors[0].fiberMeters, 400);
+  assert.equal(r.body.data.feasibilityBackupRoutes.SECONDARY[0].fiberMeters, 700);
+});
+
+test('POST /:id/feasibility with routes but no Primary is a 400', async () => {
+  const lead = await createLead({ status: 'FEASIBILITY_PENDING' });
+  const r = await request('POST', `/api/leads/${lead.id}/feasibility`, {
+    token: tokens.feasibility,
+    body: { feasible: true, routes: { PRIMARY: [], SECONDARY: [{ kind: 'OWN', fiberMeters: 1 }] } },
+  });
+  assert.equal(r.status, 400);
+});
+
+test('PUT /:id/fiber-routes: feasibility edits a later-stage lead; NOC cannot', async () => {
+  const lead = await fullLead({
+    status: 'NOC_L3_PENDING',
+    feasibilityReviewedAt: new Date(),
+    feasibilityVendors: [{ kind: 'OWN', fiberMeters: 100 }],
+  });
+  const body = { routes: { PRIMARY: [{ kind: 'OWN', fiberMeters: 120 }], FOURTH: [{ kind: 'OWN', fiberMeters: 50 }] } };
+  const ok = await request('PUT', `/api/leads/${lead.id}/fiber-routes`, { token: tokens.feasibility, body });
+  assert.equal(ok.status, 200);
+  assert.equal(ok.body.data.status, 'NOC_L3_PENDING');
+  assert.equal(ok.body.data.feasibilityBackupRoutes.FOURTH[0].fiberMeters, 50);
+  assert.equal(ok.body.data.pricing, undefined, 'response is stripped for the feasibility role');
+
+  const noc = await request('PUT', `/api/leads/${lead.id}/fiber-routes`, { token: tokens.nocL3, body });
+  assert.equal(noc.status, 403);
+
+  const bad = await request('PUT', `/api/leads/${lead.id}/fiber-routes`, {
+    token: tokens.feasibility,
+    body: { routes: { PRIMARY: [] } },
+  });
+  assert.equal(bad.status, 400);
+});
+
+test('GET /feasibility/reviewed lists every lead past feasibility, any stage, stripped', async () => {
+  await fullLead({ status: 'COMPLETED', feasibilityReviewedAt: new Date(), organizationName: 'Done Co' });
+  await fullLead({ status: 'PRICING_PENDING', feasibilityReviewedAt: new Date(), organizationName: 'Pricing Co' });
+  await fullLead({ status: 'FEASIBILITY_PENDING', organizationName: 'Pending Co' });
+  await fullLead({ status: 'NEW', organizationName: 'New Co' });
+  const r = await request('GET', '/api/leads/feasibility/reviewed', { token: tokens.feasibility });
+  assert.equal(r.status, 200);
+  const names = r.body.items.map((l) => l.organizationName).sort();
+  assert.deepEqual(names, ['Done Co', 'Pricing Co']);
+  assert.equal(r.body.pagination.total, 2);
+  assert.equal(r.body.items[0].pricing, undefined);
+
+  const search = await request('GET', '/api/leads/feasibility/reviewed?search=done', { token: tokens.feasibility });
+  assert.deepEqual(search.body.items.map((l) => l.organizationName), ['Done Co']);
+
+  const noc = await request('GET', '/api/leads/feasibility/reviewed', { token: tokens.nocL2 });
+  assert.equal(noc.status, 403);
+});
+
 test('store queue rows are minimal — no contact, pricing, or requirement details', async () => {
   await fullLead({ status: 'AWAITING_DISPATCH' });
   const store = await login('STORE_USER');
