@@ -5,6 +5,40 @@ import { parsePagination, paginatedResponse } from '../utils/pagination.js';
 
 const isValidCoord = (v, max) => typeof v === 'number' && Number.isFinite(v) && Math.abs(v) <= max;
 
+export const POP_TYPES = ['1G', '10G', '40G', '100G', '200G', '400G'];
+export const JUNCTION_TYPES = ['2w Compass', '4w FTA', 'JC 48F', 'JC 96F'];
+
+const typeError = {
+  popType: `POP type must be one of: ${POP_TYPES.join(', ')}.`,
+  junctionType: `Junction type must be one of: ${JUNCTION_TYPES.join(', ')}.`,
+};
+
+/** Canonical spelling of `value` from `allowed` (case-insensitive), '' when blank, undefined when invalid. */
+const canonicalType = (value, allowed) => {
+  const v = String(value ?? '').trim();
+  if (!v) return '';
+  return allowed.find((a) => a.toLowerCase() === v.toLowerCase());
+};
+
+/**
+ * Validate a single-POP body (create + edit). Both types are required here;
+ * only the bulk import tolerates blanks. Returns { error } or { data }.
+ */
+const parsePopBody = (body) => {
+  const name = String(body?.name || '').trim();
+  const latitude = Number(body?.latitude);
+  const longitude = Number(body?.longitude);
+  const popType = canonicalType(body?.popType, POP_TYPES);
+  const junctionType = canonicalType(body?.junctionType, JUNCTION_TYPES);
+
+  if (!name) return { error: 'A POP name is required.' };
+  if (!isValidCoord(latitude, 90)) return { error: 'Latitude must be a number between -90 and 90.' };
+  if (!isValidCoord(longitude, 180)) return { error: 'Longitude must be a number between -180 and 180.' };
+  if (!popType) return { error: typeError.popType };
+  if (!junctionType) return { error: typeError.junctionType };
+  return { data: { name, latitude, longitude, popType, junctionType } };
+};
+
 /**
  * GET /api/pop-locations?q= — searchable list of saved POPs (name match).
  * Passing `page` switches to a paginated envelope for the management page; the
@@ -36,26 +70,18 @@ export const listPopLocations = async (req, res) => {
   }
 };
 
-/** POST /api/pop-locations { name, latitude, longitude } — create a reusable POP. */
+/** POST /api/pop-locations { name, latitude, longitude, popType, junctionType } — create a reusable POP. */
 export const createPopLocation = async (req, res) => {
   try {
-    const name = String(req.body?.name || '').trim();
-    const latitude = Number(req.body?.latitude);
-    const longitude = Number(req.body?.longitude);
-
-    if (!name) return res.status(400).json({ message: 'A POP name is required.' });
-    if (!isValidCoord(latitude, 90)) {
-      return res.status(400).json({ message: 'Latitude must be a number between -90 and 90.' });
-    }
-    if (!isValidCoord(longitude, 180)) {
-      return res.status(400).json({ message: 'Longitude must be a number between -180 and 180.' });
-    }
+    const { error, data: fields } = parsePopBody(req.body);
+    if (error) return res.status(400).json({ message: error });
+    const { name, latitude, longitude } = fields;
 
     const existing = await prisma.popLocation.findUnique({ where: { name } });
     if (existing) return res.json({ message: 'A POP with this name already exists.', data: existing });
 
     const data = await prisma.popLocation.create({
-      data: { name, latitude, longitude, createdById: req.user.id },
+      data: { ...fields, createdById: req.user.id },
     });
 
     await logEvent({
@@ -73,11 +99,47 @@ export const createPopLocation = async (req, res) => {
 };
 
 /**
- * POST /api/pop-locations/bulk { rows: [{ name, latitude, longitude }] } — bulk
+ * PUT /api/pop-locations/:id { name, latitude, longitude, popType, junctionType }
+ * — edit a POP. Leads keep the snapshot taken at feasibility, so past display is
+ * unaffected by a rename.
+ */
+export const updatePopLocation = async (req, res) => {
+  try {
+    const { error, data: fields } = parsePopBody(req.body);
+    if (error) return res.status(400).json({ message: error });
+
+    const current = await prisma.popLocation.findUnique({ where: { id: req.params.id } });
+    if (!current) return res.status(404).json({ message: 'POP location not found.' });
+
+    const clash = await prisma.popLocation.findFirst({
+      where: { name: { equals: fields.name, mode: 'insensitive' }, id: { not: current.id } },
+      select: { id: true },
+    });
+    if (clash) return res.status(409).json({ message: 'A POP with this name already exists.' });
+
+    const data = await prisma.popLocation.update({ where: { id: current.id }, data: fields });
+
+    await logEvent({
+      action: 'POP_UPDATED',
+      entityType: 'PopLocation',
+      entityId: data.id,
+      summary: `Updated POP "${data.name}" (${data.latitude}, ${data.longitude}; ${data.popType}; ${data.junctionType})`,
+      actor: actorFromReq(req),
+    });
+    return res.json({ message: 'POP location updated.', data });
+  } catch (error) {
+    console.error('[pop.update]', error);
+    return res.status(500).json({ message: 'Failed to update POP location.' });
+  }
+};
+
+/**
+ * POST /api/pop-locations/bulk { rows: [{ name, latitude, longitude, popType?, junctionType? }] } — bulk
  * import (Excel upload, parsed client-side). Validates every row, skips names
  * that already exist or repeat within the file, and creates the rest in one
  * write. Returns { created, skipped, errors: [{ row, name, reason }] } so one
  * bad row never fails the batch. `row` is 1-based to match the spreadsheet.
+ * Types may be blank (older sheets lack the columns) but must be valid if given.
  */
 export const bulkCreatePopLocations = async (req, res) => {
   try {
@@ -87,7 +149,7 @@ export const bulkCreatePopLocations = async (req, res) => {
     }
 
     const errors = [];
-    const valid = []; // { name, latitude, longitude }
+    const valid = []; // { name, latitude, longitude, popType, junctionType }
     const seen = new Set(); // names already accepted in THIS file (lowercased)
     let skipped = 0;
 
@@ -108,12 +170,22 @@ export const bulkCreatePopLocations = async (req, res) => {
         errors.push({ row, name, reason: 'Longitude must be a number between -180 and 180.' });
         return;
       }
+      const popType = canonicalType(raw?.popType, POP_TYPES);
+      const junctionType = canonicalType(raw?.junctionType, JUNCTION_TYPES);
+      if (popType === undefined) {
+        errors.push({ row, name, reason: typeError.popType });
+        return;
+      }
+      if (junctionType === undefined) {
+        errors.push({ row, name, reason: typeError.junctionType });
+        return;
+      }
       if (seen.has(name.toLowerCase())) {
         skipped += 1; // duplicated within the same file
         return;
       }
       seen.add(name.toLowerCase());
-      valid.push({ name, latitude, longitude });
+      valid.push({ name, latitude, longitude, popType: popType || null, junctionType: junctionType || null });
     });
 
     // Skip names that already exist in the DB (case-insensitive on the trimmed name).

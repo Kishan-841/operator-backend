@@ -1388,7 +1388,7 @@ test('bulk POP import creates the valid rows and returns a created count', async
 test('bulk POP import skips names that already exist and reports the count', async () => {
   await request('POST', '/api/pop-locations', {
     token: tokens.feasibility,
-    body: { name: 'POP Existing', latitude: 19.0, longitude: 72.0 },
+    body: { name: 'POP Existing', latitude: 19.0, longitude: 72.0, popType: '10G', junctionType: 'JC 48F' },
   });
   const r = await request('POST', '/api/pop-locations/bulk', {
     token: tokens.feasibility,
@@ -1433,6 +1433,73 @@ test('bulk POP import is forbidden for a role without POP-create rights → 403'
     body: { rows: [{ name: 'POP X', latitude: 19, longitude: 72 }] },
   });
   assert.equal(r.status, 403);
+});
+
+const popBody = { name: 'POP Typed', latitude: 19.1, longitude: 72.9, popType: '100G', junctionType: '4w FTA' };
+
+test('POST /api/pop-locations stores POP and junction types', async () => {
+  const r = await request('POST', '/api/pop-locations', { token: tokens.feasibility, body: popBody });
+  assert.equal(r.status, 201);
+  assert.equal(r.body.data.popType, '100G');
+  assert.equal(r.body.data.junctionType, '4w FTA');
+});
+
+test('POST /api/pop-locations rejects a missing or unknown type → 400', async () => {
+  const { popType, ...noPopType } = popBody;
+  const missing = await request('POST', '/api/pop-locations', { token: tokens.feasibility, body: noPopType });
+  assert.equal(missing.status, 400);
+  const unknown = await request('POST', '/api/pop-locations', {
+    token: tokens.feasibility,
+    body: { ...popBody, junctionType: 'JC 12F' },
+  });
+  assert.equal(unknown.status, 400);
+});
+
+test('bulk POP import accepts blank types, normalises case, and reports unknown types', async () => {
+  const r = await request('POST', '/api/pop-locations/bulk', {
+    token: tokens.feasibility,
+    body: { rows: [
+      { name: 'POP Legacy', latitude: 19, longitude: 72 },
+      { name: 'POP Lower', latitude: 19, longitude: 72, popType: '10g', junctionType: 'jc 96f' },
+      { name: 'POP Wrong', latitude: 19, longitude: 72, popType: '5G' },
+    ] },
+  });
+  assert.equal(r.body.created, 2);
+  assert.equal(r.body.errors.length, 1);
+  assert.equal(r.body.errors[0].row, 3);
+  const list = await request('GET', '/api/pop-locations', { token: tokens.feasibility });
+  const lower = list.body.items.find((p) => p.name === 'POP Lower');
+  assert.equal(lower.popType, '10G');
+  assert.equal(lower.junctionType, 'JC 96F');
+  assert.equal(list.body.items.find((p) => p.name === 'POP Legacy').popType, null);
+});
+
+test('PUT /api/pop-locations/:id edits every field', async () => {
+  const created = await request('POST', '/api/pop-locations', { token: tokens.feasibility, body: popBody });
+  const r = await request('PUT', `/api/pop-locations/${created.body.data.id}`, {
+    token: tokens.admin,
+    body: { name: 'POP Renamed', latitude: 18, longitude: 73, popType: '400G', junctionType: 'JC 96F' },
+  });
+  assert.equal(r.status, 200);
+  assert.equal(r.body.data.name, 'POP Renamed');
+  assert.equal(r.body.data.latitude, 18);
+  assert.equal(r.body.data.popType, '400G');
+  assert.equal(r.body.data.junctionType, 'JC 96F');
+});
+
+test('PUT /api/pop-locations/:id guards name clashes, unknown ids, and roles', async () => {
+  const a = await request('POST', '/api/pop-locations', { token: tokens.feasibility, body: popBody });
+  await request('POST', '/api/pop-locations', { token: tokens.feasibility, body: { ...popBody, name: 'POP Other' } });
+  const url = `/api/pop-locations/${a.body.data.id}`;
+
+  const clash = await request('PUT', url, { token: tokens.admin, body: { ...popBody, name: 'pop other' } });
+  assert.equal(clash.status, 409);
+  const same = await request('PUT', url, { token: tokens.admin, body: popBody }); // keeping its own name is fine
+  assert.equal(same.status, 200);
+  const missing = await request('PUT', '/api/pop-locations/nope', { token: tokens.admin, body: popBody });
+  assert.equal(missing.status, 404);
+  const forbidden = await request('PUT', url, { token: tokens.nocL2, body: popBody });
+  assert.equal(forbidden.status, 403);
 });
 
 test('GET /api/pop-locations?page= returns a paginated envelope', async () => {
