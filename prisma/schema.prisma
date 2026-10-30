@@ -419,7 +419,8 @@ model PopLocation {
   name        String   @unique
   latitude    Float
   longitude   Float
-  // Nullable: POPs created before these existed. Allowed values live in pop.controller.js.
+  // A location is a POP or a Junction: at most one of these is set (none on older
+  // rows). Allowed values live in pop.controller.js.
   popType      String? // 1G | 10G | 40G | 100G | 200G | 400G
   junctionType String? // 2w Compass | 4w FTA | JC 48F | JC 96F
   createdById String? // soft ref — no FK relation to keep User lean

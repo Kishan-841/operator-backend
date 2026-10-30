@@ -11,6 +11,8 @@ export const JUNCTION_TYPES = ['2w Compass', '4w FTA', 'JC 48F', 'JC 96F'];
 const typeError = {
   popType: `POP type must be one of: ${POP_TYPES.join(', ')}.`,
   junctionType: `Junction type must be one of: ${JUNCTION_TYPES.join(', ')}.`,
+  both: 'Choose either a POP type or a junction type, not both.',
+  neither: 'Choose a POP type or a junction type.',
 };
 
 /** Canonical spelling of `value` from `allowed` (case-insensitive), '' when blank, undefined when invalid. */
@@ -21,8 +23,8 @@ const canonicalType = (value, allowed) => {
 };
 
 /**
- * Validate a single-POP body (create + edit). Both types are required here;
- * only the bulk import tolerates blanks. Returns { error } or { data }.
+ * Validate a single-POP body (create + edit). Exactly one type is required here;
+ * only the bulk import tolerates neither. Returns { error } or { data }.
  */
 const parsePopBody = (body) => {
   const name = String(body?.name || '').trim();
@@ -34,9 +36,11 @@ const parsePopBody = (body) => {
   if (!name) return { error: 'A POP name is required.' };
   if (!isValidCoord(latitude, 90)) return { error: 'Latitude must be a number between -90 and 90.' };
   if (!isValidCoord(longitude, 180)) return { error: 'Longitude must be a number between -180 and 180.' };
-  if (!popType) return { error: typeError.popType };
-  if (!junctionType) return { error: typeError.junctionType };
-  return { data: { name, latitude, longitude, popType, junctionType } };
+  if (popType === undefined) return { error: typeError.popType };
+  if (junctionType === undefined) return { error: typeError.junctionType };
+  if (popType && junctionType) return { error: typeError.both };
+  if (!popType && !junctionType) return { error: typeError.neither };
+  return { data: { name, latitude, longitude, popType: popType || null, junctionType: junctionType || null } };
 };
 
 /**
@@ -123,7 +127,7 @@ export const updatePopLocation = async (req, res) => {
       action: 'POP_UPDATED',
       entityType: 'PopLocation',
       entityId: data.id,
-      summary: `Updated POP "${data.name}" (${data.latitude}, ${data.longitude}; ${data.popType}; ${data.junctionType})`,
+      summary: `Updated POP "${data.name}" (${data.latitude}, ${data.longitude}; ${data.popType ?? data.junctionType})`,
       actor: actorFromReq(req),
     });
     return res.json({ message: 'POP location updated.', data });
@@ -139,7 +143,8 @@ export const updatePopLocation = async (req, res) => {
  * that already exist or repeat within the file, and creates the rest in one
  * write. Returns { created, skipped, errors: [{ row, name, reason }] } so one
  * bad row never fails the batch. `row` is 1-based to match the spreadsheet.
- * Types may be blank (older sheets lack the columns) but must be valid if given.
+ * Both types may be blank (older sheets lack the columns); a filled one must be
+ * valid, and a row can't fill both.
  */
 export const bulkCreatePopLocations = async (req, res) => {
   try {
@@ -178,6 +183,10 @@ export const bulkCreatePopLocations = async (req, res) => {
       }
       if (junctionType === undefined) {
         errors.push({ row, name, reason: typeError.junctionType });
+        return;
+      }
+      if (popType && junctionType) {
+        errors.push({ row, name, reason: typeError.both });
         return;
       }
       if (seen.has(name.toLowerCase())) {
