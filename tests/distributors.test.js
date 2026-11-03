@@ -163,7 +163,7 @@ test('a PIN_RATE distributor saves without the prospect metrics (leads still req
   assert.equal(asLead.status, 400, 'leads still require estimatedUserCount / ratePerUser');
 });
 
-test('duplicate distributor mobile/email → 400 naming the existing one', async () => {
+test('distributors may share a mobile; a duplicate email → 400 naming the existing one', async () => {
   const first = await request('POST', '/api/distributors', {
     token: tokens.admin,
     body: { name: 'North Head', phone: '9111111111', email: 'north@dist.test' },
@@ -173,13 +173,13 @@ test('duplicate distributor mobile/email → 400 naming the existing one', async
     token: tokens.admin,
     body: { name: 'Other', phone: '9111111111' },
   });
-  assert.equal(dupPhone.status, 400);
-  assert.match(dupPhone.body.message, /North Head/);
+  assert.equal(dupPhone.status, 201, 'same mobile is allowed');
   const dupEmail = await request('POST', '/api/distributors', {
     token: tokens.admin,
     body: { name: 'Other', email: 'NORTH@dist.test' },
   });
   assert.equal(dupEmail.status, 400);
+  assert.match(dupEmail.body.message, /North Head/);
 });
 
 test('the default cannot be deleted; deleting others reassigns franchises to the default', async () => {
@@ -303,7 +303,7 @@ test('bulk distributor import skips a row duplicating an existing email and name
   assert.match(r.body.duplicates[0].reason, /email/i);
 });
 
-test('bulk distributor import de-duplicates a repeated phone within the file', async () => {
+test('bulk distributor import allows a repeated phone within the file', async () => {
   const r = await request('POST', '/api/distributors/bulk', {
     token: tokens.admin,
     body: { rows: [
@@ -311,9 +311,8 @@ test('bulk distributor import de-duplicates a repeated phone within the file', a
       distRow({ email: 'p2@dist.test', whatsappNumber: '9993330003', phone: '9993330009' }),
     ] },
   });
-  assert.equal(r.body.created, 1);
-  assert.equal(r.body.skipped, 1);
-  assert.match(r.body.duplicates[0].reason, /mobile|phone/i);
+  assert.equal(r.body.created, 2);
+  assert.equal(r.body.skipped, 0);
 });
 
 test('bulk distributor import reports an invalid row with its sheet and row', async () => {

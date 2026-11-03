@@ -69,14 +69,14 @@ const normalize = (body = {}) => {
   };
 };
 
-/** Another distributor already using this mobile/email (self excluded). */
-const findClash = async ({ phone, email }, excludeId) => {
-  const or = [];
-  if (phone) or.push({ phone });
-  if (email) or.push({ email: { equals: email, mode: 'insensitive' } });
-  if (!or.length) return null;
+/**
+ * Another distributor already using this email (self excluded). A shared mobile
+ * is allowed — one number can front several businesses.
+ */
+const findClash = async ({ email }, excludeId) => {
+  if (!email) return null;
   return prisma.distributor.findFirst({
-    where: { OR: or, ...(excludeId ? { NOT: { id: excludeId } } : {}) },
+    where: { email: { equals: email, mode: 'insensitive' }, ...(excludeId ? { NOT: { id: excludeId } } : {}) },
     select: { name: true, email: true, phone: true },
   });
 };
@@ -125,7 +125,7 @@ export const createDistributor = async (req, res) => {
     const data = result.data;
     const clash = await findClash(data);
     if (clash) {
-      return res.status(400).json({ message: `Distributor "${clash.name}" already uses these contact details.` });
+      return res.status(400).json({ message: `Distributor "${clash.name}" already uses this email.` });
     }
     // Dual-role: creating a distributor also creates (or links) its franchise-lead
     // atomically — if the lead can't be made, the distributor isn't either.
@@ -155,7 +155,7 @@ export const createDistributor = async (req, res) => {
 /**
  * POST /api/distributors/bulk (ADMIN) — Excel import. Each row is validated with
  * the distributor variant, duplicates (existing distributors or repeats within
- * the file, by email/phone) are skipped, and the rest created. Returns
+ * the file, by email) are skipped, and the rest created. Returns
  * { created, skipped, duplicates: [{ sheet, row, reason }], errors: [...] } so
  * one bad or duplicate row never fails the batch.
  */
@@ -169,7 +169,6 @@ export const bulkCreateDistributors = async (req, res) => {
     const errors = [];
     const duplicates = [];
     const seenEmails = new Set();
-    const seenPhones = new Set();
     let created = 0;
     let skipped = 0;
     const noteDup = (where, reason) => { duplicates.push({ ...where, reason }); skipped += 1; };
@@ -183,7 +182,7 @@ export const bulkCreateDistributors = async (req, res) => {
         errors.push({ ...where, reason: result.errors?.[0]?.message || result.message || 'Invalid row.' });
         continue;
       }
-      const { name, phone, email } = result.data;
+      const { email } = result.data;
       const emailKey = email ? email.toLowerCase() : null;
 
       // Duplicate — within this file first (name the field), then the DB.
@@ -191,24 +190,15 @@ export const bulkCreateDistributors = async (req, res) => {
         noteDup(where, 'Duplicate email — repeated earlier in this file.');
         continue;
       }
-      if (phone && seenPhones.has(phone)) {
-        noteDup(where, 'Duplicate mobile number — repeated earlier in this file.');
-        continue;
-      }
       const clash = await findClash(result.data);
       if (clash) {
-        const fields = [];
-        if (emailKey && clash.email?.toLowerCase() === emailKey) fields.push('email');
-        if (phone && clash.phone === phone) fields.push('mobile number');
-        const which = fields.length ? fields.join(' and ') : 'contact';
-        noteDup(where, `Duplicate ${which} — already used by distributor "${clash.name}".`);
+        noteDup(where, `Duplicate email — already used by distributor "${clash.name}".`);
         continue;
       }
 
       try {
         await prisma.distributor.create({ data: result.data });
         if (emailKey) seenEmails.add(emailKey);
-        if (phone) seenPhones.add(phone);
         created += 1;
       } catch {
         errors.push({ ...where, reason: 'Could not be saved.' });
@@ -240,7 +230,7 @@ export const updateDistributor = async (req, res) => {
     const data = result.data;
     const clash = await findClash(data, dist.id);
     if (clash) {
-      return res.status(400).json({ message: `Distributor "${clash.name}" already uses these contact details.` });
+      return res.status(400).json({ message: `Distributor "${clash.name}" already uses this email.` });
     }
     // isDefault is not API-settable — `data` never carries it, so the flag
     // survives edits untouched.

@@ -5,11 +5,12 @@ import { generateLeadNumber } from './leadNumber.service.js';
 // inside the caller's transaction so the pair is created atomically, and both
 // REUSE an existing counterpart rather than creating a duplicate.
 
+// Match the counterpart by email; mobile only when there's no email. Mobiles may
+// repeat across businesses, so a shared number alone must not link two of them.
 const contactOr = ({ email, phone }) => {
-  const or = [];
-  if (email) or.push({ email: { equals: email, mode: 'insensitive' } });
-  if (phone) or.push({ phone });
-  return or;
+  if (email) return [{ email: { equals: email, mode: 'insensitive' } }];
+  if (phone) return [{ phone }];
+  return [];
 };
 
 const findLeadByContact = async (tx, contact) => {
