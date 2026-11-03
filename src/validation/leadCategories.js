@@ -139,6 +139,7 @@ const contactBase = z.object({
   city: optStr,
   state: optStr,
   pincode: optStr,
+  fullAddress: optStr,
   latitude: z.number().min(-90).max(90).optional().nullable(),
   longitude: z.number().min(-180).max(180).optional().nullable(),
   territory: optStr,

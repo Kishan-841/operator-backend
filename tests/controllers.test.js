@@ -186,6 +186,30 @@ test('POST /api/leads (sales, valid) → 201 with a generated lead number', asyn
   assert.equal(r.body.data.status, 'NEW');
 });
 
+test('POST + PUT /api/leads stores the optional full address', async () => {
+  const bare = await request('POST', '/api/leads', { token: tokens.sales, body: validLead() });
+  assert.equal(bare.status, 201);
+  assert.equal(bare.body.data.fullAddress, null);
+
+  const updated = await request('PUT', `/api/leads/${bare.body.data.id}`, {
+    token: tokens.sales,
+    body: { ...validLead(), fullAddress: '4th Floor, Tower B, Andheri East, Mumbai 400069' },
+  });
+  assert.equal(updated.status, 200);
+  assert.equal(updated.body.data.fullAddress, '4th Floor, Tower B, Andheri East, Mumbai 400069');
+});
+
+test('POST /api/leads/bulk imports the full address column', async () => {
+  const r = await request('POST', '/api/leads/bulk', {
+    token: tokens.admin,
+    body: { rows: [{ ...validLead(), _sheet: 'ISP', _row: 2, fullAddress: 'Plot 7, MIDC, Pune' }] },
+  });
+  assert.equal(r.status, 200);
+  assert.equal(r.body.created, 1);
+  const list = await request('GET', '/api/leads', { token: tokens.admin });
+  assert.equal(list.body.items.find((l) => l.email === 'ops@acme.test').fullAddress, 'Plot 7, MIDC, Pune');
+});
+
 test('GET /api/leads search matches area, pincode and mobile', async () => {
   const me = userId('SALES_USER');
   await createLead({ assignedSalesId: me, organizationName: 'Zeta', area: 'Hinjewadi', pincode: '411057', phone: '9998887770', email: 'zeta@x.test' });

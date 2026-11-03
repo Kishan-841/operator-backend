@@ -18,7 +18,7 @@ import { ensureDistributorForLead } from '../services/dualEntity.service.js';
 const LEAD_DIFF_FIELDS = [
   'category', 'organizationName', 'email', 'contactPersonName', 'phone', 'territory',
   'annualRevenue', 'website', 'whatsappNumber', 'existingServiceProvider', 'gender',
-  'areaName', 'area', 'city', 'state', 'pincode', 'latitude', 'longitude', 'sourceOfLead',
+  'areaName', 'area', 'city', 'state', 'pincode', 'fullAddress', 'latitude', 'longitude', 'sourceOfLead',
   'customerInterestLevel', 'notes', 'requirementDetails',
 ];
 
@@ -267,7 +267,7 @@ const IMPORT_FIELD_LABELS = {
   whatsappNumber: 'WhatsApp number', gender: 'Gender', website: 'Website',
   existingServiceProvider: 'Existing ISP', annualRevenue: 'Annual revenue',
   areaName: 'Building name', area: 'Area name', city: 'City', state: 'State',
-  pincode: 'Pincode', latitude: 'Latitude', longitude: 'Longitude', territory: 'Territory',
+  pincode: 'Pincode', fullAddress: 'Full address', latitude: 'Latitude', longitude: 'Longitude', territory: 'Territory',
   sourceOfLead: 'Source of lead', customerInterestLevel: 'Interest level', notes: 'Notes',
   estimatedUserCount: 'Estimated user count', ratePerUser: 'Rate per user', userCount: 'User count',
   percentageSplit: 'Percentage split', fixedRate: 'Fixed rate', rateType: 'Rate type',

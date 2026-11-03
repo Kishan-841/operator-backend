@@ -203,6 +203,7 @@ model Lead {
   city         String?
   state        String?
   pincode      String?
+  fullAddress  String? // optional free-text postal address
   latitude     Float?
   longitude    Float?
   territory    String?

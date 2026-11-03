@@ -40,6 +40,7 @@ const fullLead = () => ({
   areaName: 'Tower A',
   city: 'Pune',
   pincode: '411001',
+  fullAddress: 'Tower A, FC Road, Pune 411001',
   latitude: 18.52,
   longitude: 73.85,
   sourceOfLead: 'REFERRAL',
@@ -68,6 +69,7 @@ test('NOC L2 and L3 see every lead detail (contact, mobile, address, lat/long, s
     assert.equal(out.website, 'y.net', `${role} website`);
     assert.equal(out.areaName, 'Tower A', `${role} address`);
     assert.equal(out.city, 'Pune', `${role} city`);
+    assert.equal(out.fullAddress, 'Tower A, FC Road, Pune 411001', `${role} full address`);
     assert.equal(out.latitude, 18.52, `${role} latitude`);
     assert.equal(out.longitude, 73.85, `${role} longitude`);
     assert.equal(out.sourceOfLead, 'REFERRAL', `${role} source`);
