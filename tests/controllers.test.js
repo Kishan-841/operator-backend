@@ -1567,6 +1567,34 @@ const pinRow = (over = {}) => ({
   ...over,
 });
 
+test('bulk lead import accepts a body over the old 100kb default (hundreds of rows)', async () => {
+  const rows = Array.from({ length: 400 }, (_, i) =>
+    pinRow({
+      _row: i + 2,
+      organizationName: `Big Org ${i}`,
+      email: `big${i}@acme.test`,
+      whatsappNumber: String(9100000000 + i),
+      phone: String(9200000000 + i),
+      fullAddress: `Plot ${i}, Some Long Industrial Estate Road, Near The Main Junction, Pune 411001`,
+      notes: 'Imported from the weekly new-entries sheet; follow up after site survey.',
+    }),
+  );
+  assert.ok(JSON.stringify({ rows }).length > 150 * 1024, 'payload is well over 100kb');
+  const r = await request('POST', '/api/leads/bulk', { token: tokens.admin, body: { rows } });
+  assert.equal(r.status, 200);
+  assert.equal(r.body.created, 400);
+  assert.equal(r.body.errors.length, 0);
+});
+
+test('an oversized JSON body → 413 with a readable message', async () => {
+  const r = await request('POST', '/api/leads/bulk', {
+    token: tokens.admin,
+    body: { rows: [pinRow({ notes: 'x'.repeat(11 * 1024 * 1024) })] },
+  });
+  assert.equal(r.status, 413);
+  assert.match(r.body.message, /too large/i);
+});
+
 test('bulk lead import creates valid rows at NEW status owned by the admin', async () => {
   const r = await request('POST', '/api/leads/bulk', {
     token: tokens.admin,

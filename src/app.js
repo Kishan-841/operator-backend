@@ -33,7 +33,9 @@ app.set('trust proxy', 1);
 
 app.use(helmet());
 app.use(cors({ origin: FRONTEND_URL, credentials: true }));
-app.use(express.json());
+// Bulk Excel imports send every parsed row in one JSON body (~600 bytes a row),
+// so the 100kb default rejects a few hundred leads. 10mb fits ~15k rows.
+app.use(express.json({ limit: '10mb' }));
 
 // Global rate limit — mirrors ISP_CRM's 100 requests/min.
 app.use(
@@ -69,6 +71,9 @@ app.use('/api/map', mapRoutes);
 app.use((_req, res) => res.status(404).json({ message: 'Not found.' }));
 // eslint-disable-next-line no-unused-vars
 app.use((err, req, res, _next) => {
+  if (err?.type === 'entity.too.large') {
+    return res.status(413).json({ message: 'Upload is too large. Split the file into smaller batches.' });
+  }
   // Structured log; this is the hook point for Sentry (Sentry.captureException(err)).
   console.error(`[error] ${req.method} ${req.originalUrl} —`, err?.message || err);
   res.status(500).json({ message: 'Internal server error.' });
