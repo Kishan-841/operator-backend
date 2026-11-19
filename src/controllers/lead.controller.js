@@ -10,7 +10,7 @@ import { logEvent, diffFields } from '../services/statusChangeLog.service.js';
 import { addLeadNote } from '../services/leadNote.service.js';
 import { stripLeadForRole, stripLeadsForRole } from '../utils/leadVisibility.js';
 import { actorFromReq } from '../utils/requestContext.js';
-import { isAdmin } from '../utils/roleHelper.js';
+import { isAdmin, canViewAllLeads } from '../utils/roleHelper.js';
 import { refreshSidebarForRoles, notifyOneUser } from '../services/notification.service.js';
 import { ensureDistributorForLead } from '../services/dualEntity.service.js';
 
@@ -555,9 +555,10 @@ export const getLeads = async (req, res) => {
     }
 
     const where = {
-      // Sales users see only the leads they own; admins see every lead, and may
-      // narrow to one owner via ?assignedSalesId= (used by the dashboard drill-in).
-      ...(isAdmin(req.user)
+      // Sales users see only the leads they own; admins and read-only viewers see
+      // every lead, and may narrow to one owner via ?assignedSalesId= (used by the
+      // dashboard drill-in).
+      ...(canViewAllLeads(req.user)
         ? (assignedSalesId ? { assignedSalesId: String(assignedSalesId) } : {})
         : { assignedSalesId: req.user.id }),
       ...(category && LEAD_CATEGORIES.includes(category) ? { category } : {}),
@@ -604,8 +605,8 @@ export const getLead = async (req, res) => {
       include: creatorSelect,
     });
     if (!lead) return res.status(404).json({ message: 'Lead not found.' });
-    // Sales users may only open their own leads; admins may open any.
-    if (!isAdmin(req.user) && lead.assignedSalesId !== req.user.id) {
+    // Sales users may only open their own leads; admins and viewers may open any.
+    if (!canViewAllLeads(req.user) && lead.assignedSalesId !== req.user.id) {
       return res.status(404).json({ message: 'Lead not found.' });
     }
     return res.json({ data: stripLeadForRole(req.user, lead) });

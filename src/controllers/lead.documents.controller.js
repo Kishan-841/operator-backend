@@ -2,7 +2,7 @@ import prisma from '../config/db.js';
 import { saveBuffer, sendDownload, removeFile } from '../services/storage.service.js';
 import { logEvent } from '../services/statusChangeLog.service.js';
 import { actorFromReq } from '../utils/requestContext.js';
-import { assertLeadAccess } from '../utils/leadAccess.js';
+import { assertLeadAccess, assertLeadViewAccess } from '../utils/leadAccess.js';
 import { canonicalDocType } from '../utils/documentTypes.js';
 import { handleError } from '../utils/logger.js';
 import * as sm from '../services/leadStateMachine.js';
@@ -86,7 +86,7 @@ export const listDocuments = async (req, res) => {
       select: { id: true, assignedSalesId: true, status: true },
     });
     if (!lead) return res.status(404).json({ message: 'Lead not found.' });
-    assertLeadAccess(req.user, lead);
+    assertLeadViewAccess(req.user, lead);
 
     const items = await prisma.leadDocument.findMany({
       where: { leadId: req.params.id },
@@ -107,7 +107,7 @@ export const downloadDocument = async (req, res) => {
       include: { lead: { select: { assignedSalesId: true, status: true } } },
     });
     if (!doc) return res.status(404).json({ message: 'Document not found.' });
-    assertLeadAccess(req.user, doc.lead);
+    assertLeadViewAccess(req.user, doc.lead);
     return await sendDownload(res, doc);
   } catch (error) {
     return handleError(res, error, 'doc.download', 'Download failed.');

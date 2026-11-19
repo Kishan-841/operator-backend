@@ -23,6 +23,7 @@ export const ROLES = [
   'NOC_L2_USER',
   'NOC_L3_USER',
   'SOFTWARE_USER',
+  'VIEWER',
 ];
 
 const users = {};

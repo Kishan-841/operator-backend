@@ -1,7 +1,7 @@
 import prisma from '../config/db.js';
 import { parsePagination, paginatedResponse } from '../utils/pagination.js';
 import { isAdmin } from '../utils/roleHelper.js';
-import { canAccessLead } from '../utils/leadAccess.js';
+import { canViewLead } from '../utils/leadAccess.js';
 import { ROLE_NOTE_STAGES } from '../utils/leadVisibility.js';
 
 const leadSelect = { lead: { select: { id: true, leadNumber: true, organizationName: true } } };
@@ -30,7 +30,7 @@ export const getLeadNotes = async (req, res) => {
       where: { id: req.params.id },
       select: { assignedSalesId: true, status: true },
     });
-    if (!lead || !canAccessLead(req.user, lead)) return res.json({ items: [] });
+    if (!lead || !canViewLead(req.user, lead)) return res.json({ items: [] });
     const items = await prisma.leadNote.findMany({
       where: { leadId: req.params.id, ...(noteStageScope(req.user) ?? {}) },
       orderBy: { createdAt: 'asc' },

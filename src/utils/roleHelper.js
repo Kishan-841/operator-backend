@@ -18,8 +18,14 @@ export const hasAccess = (user, role) => isAdmin(user) || (user?.accesses ?? [])
 /** True if the user has the given role (admins always pass). Alias of hasAccess. */
 export const hasRole = (user, role) => hasAccess(user, role);
 
+/**
+ * True if the user may VIEW every lead (admins, and the read-only VIEWER access).
+ * Read paths only — never use this to authorize an action.
+ */
+export const canViewAllLeads = (user) => isAdmin(user) || (user?.accesses ?? []).includes('VIEWER');
+
 /** True if the user holds any of the given accesses (admins always pass). */
 export const hasAnyRole = (user, roles) =>
   isAdmin(user) || (Array.isArray(roles) && roles.some((r) => hasAccess(user, r)));
 
-export default { isAdmin, hasAccess, hasRole, hasAnyRole };
+export default { isAdmin, hasAccess, hasRole, hasAnyRole, canViewAllLeads };

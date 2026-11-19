@@ -17,50 +17,55 @@ const ST = 'STORE_USER';
 const L2 = 'NOC_L2_USER';
 const L3 = 'NOC_L3_USER';
 const SW = 'SOFTWARE_USER';
+// Read-only viewer: every lead detail EXCEPT money (price, rates, revenue
+// split, bank details, approval/pricing notes) and the customer portal password.
+const V = 'VIEWER';
 
 // field group → roles allowed to see it (approved visibility matrix).
 const GROUPS = [
-  { fields: ['contactPersonName', 'phone', 'whatsappNumber', 'website', 'gender'], roles: [S, F, D, L2, L3, SW] },
+  { fields: ['contactPersonName', 'phone', 'whatsappNumber', 'website', 'gender'], roles: [S, F, D, L2, L3, SW, V] },
   {
     fields: ['areaName', 'area', 'city', 'state', 'pincode', 'fullAddress', 'latitude', 'longitude', 'territory', 'popLocationId', 'popLocation'],
-    roles: [S, F, D, ST, L2, L3],
+    roles: [S, F, D, ST, L2, L3, V],
   },
-  { fields: ['email', 'existingServiceProvider', 'annualRevenue'], roles: [S, F, L2, L3, SW] },
-  { fields: ['sourceOfLead', 'customerInterestLevel', 'notes'], roles: [S, F, L2, L3] },
+  { fields: ['email', 'existingServiceProvider', 'annualRevenue'], roles: [S, F, L2, L3, SW, V] },
+  { fields: ['sourceOfLead', 'customerInterestLevel', 'notes'], roles: [S, F, L2, L3, V] },
   // Rates are visible to sales, software and admins only. NOC L2/L3 see every
-  // lead detail EXCEPT price — never add them to this group or the approval one.
+  // lead detail EXCEPT price — never add them (or the viewer) to this group or
+  // the approval-notes one.
   { fields: ['pricing'], roles: [S, SW] },
-  {
-    fields: ['approvalNotes', 'pricingRevisionReason', 'pricingRevisionCount', 'approvedById', 'approvedAt', 'approvedBy'],
-    roles: [S],
-  },
+  // Approval notes / revision reasons quote prices, so they stay sales-only;
+  // who approved and when is plain stage data.
+  { fields: ['approvalNotes', 'pricingRevisionReason', 'pricingRevisionCount'], roles: [S] },
+  { fields: ['approvedById', 'approvedAt', 'approvedBy'], roles: [S, V] },
   {
     fields: [
       'feasibilityNotes', 'feasibilityNetworkType', 'feasibilityPops', 'feasibilityOffNet',
       'feasibilityVendors', 'feasibilityBackupRoutes', 'feasibilityReviewedAt', 'feasibilityAssignedToId', 'feasibilityAssignedTo',
     ],
-    roles: [S, F, D, L2, L3],
+    roles: [S, F, D, L2, L3, V],
   },
-  { fields: ['documents', 'docsRevisionReason', 'docsRevisionCount'], roles: [S, SW] },
-  { fields: ['materialReq', 'deliveryRequest'], roles: [S, D, ST] },
-  { fields: ['dispatch'], roles: [S, D, ST, L2, L3] },
-  { fields: ['installationCompletedAt'], roles: [S, D, L2, L3] },
-  { fields: ['ipDetails'], roles: [S, L2, L3, SW] },
-  { fields: ['nocL2ConfigNotes', 'nocL2Config', 'nocL2AssignedToId', 'nocL2AssignedTo'], roles: [L2, L3] },
-  { fields: ['aggregatorType', 'aggregatorTypes', 'aggregatorSelections', 'aggregatorConfirmRemark'], roles: [S, L2, L3, SW] },
+  { fields: ['documents', 'docsRevisionReason', 'docsRevisionCount'], roles: [S, SW, V] },
+  { fields: ['materialReq', 'deliveryRequest'], roles: [S, D, ST, V] },
+  { fields: ['dispatch'], roles: [S, D, ST, L2, L3, V] },
+  { fields: ['installationCompletedAt'], roles: [S, D, L2, L3, V] },
+  { fields: ['ipDetails'], roles: [S, L2, L3, SW, V] },
+  { fields: ['nocL2ConfigNotes', 'nocL2Config', 'nocL2AssignedToId', 'nocL2AssignedTo'], roles: [L2, L3, V] },
+  { fields: ['aggregatorType', 'aggregatorTypes', 'aggregatorSelections', 'aggregatorConfirmRemark'], roles: [S, L2, L3, SW, V] },
   {
     // NOC L2/L3 configure the network after the software team provisions the
     // portal, so they need the software/portal details on the lead.
-    fields: ['portalManagedBy', 'portalUrl', 'portalUsername', 'portalPassword', 'ipPoolNoticeAt', 'softwareAssignedToId', 'softwareAssignedTo'],
-    roles: [S, L2, L3, SW],
+    fields: ['portalManagedBy', 'portalUrl', 'portalUsername', 'ipPoolNoticeAt', 'softwareAssignedToId', 'softwareAssignedTo'],
+    roles: [S, L2, L3, SW, V],
   },
-  { fields: ['ipAllocation', 'bngConfigDoneAt', 'nocL3AssignedToId', 'nocL3AssignedTo'], roles: [L2, L3] },
+  { fields: ['portalPassword'], roles: [S, L2, L3, SW] },
+  { fields: ['ipAllocation', 'bngConfigDoneAt', 'nocL3AssignedToId', 'nocL3AssignedTo'], roles: [L2, L3, V] },
   {
     fields: [
       'l3ToL2AssignedToId', 'l3ToL2AssignedTo', 'agreementGeneratedAt', 'agreementSentForSignatureAt',
       'agreementSentForSignatureById', 'agreementUploadedAt', 'agreementVerifiedById', 'agreementVerifiedBy',
     ],
-    roles: [S, L2, L3, SW],
+    roles: [S, L2, L3, SW, V],
   },
 ];
 
@@ -77,6 +82,7 @@ const REQ_ACCESS = {
   [L3]: 'sizing',
   [SW]: 'rates', // software needs the AS number + the rates (agreement stage)
   [ST]: 'none',
+  [V]: 'sizing', // no rates, splits or bank details
 };
 
 const stripRequirement = (details, access) => {
@@ -141,4 +147,10 @@ export const ROLE_NOTE_STAGES = {
   [L2]: ['INSTALLATION', 'NOC_L2', 'NOC_L3', 'AGGREGATOR', 'L3_TO_L2'],
   [L3]: ['INSTALLATION', 'NOC_L2', 'NOC_L3', 'AGGREGATOR', 'L3_TO_L2'],
   [SW]: ['DOCS', 'SOFTWARE', 'AGREEMENT'],
+  // Every stage except PRICING / APPROVAL, whose notes discuss price. A stage
+  // added later stays hidden until listed here (safe default).
+  [V]: [
+    'LEAD', 'FEASIBILITY', 'DOCS', 'DELIVERY', 'STORE', 'DISPATCH', 'INSTALLATION', 'NOC_L2', 'NOC_L3',
+    'AGGREGATOR', 'SOFTWARE', 'L3_TO_L2', 'CLIENT_HANDOVER', 'AGREEMENT', 'GENERAL',
+  ],
 };

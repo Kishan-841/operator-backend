@@ -1,4 +1,4 @@
-import { isAdmin, hasAccess } from './roleHelper.js';
+import { isAdmin, hasAccess, canViewAllLeads } from './roleHelper.js';
 
 /**
  * Lead-level access control (object-level authorization).
@@ -33,13 +33,27 @@ export const canAccessLead = (user, lead) => {
   return accesses.some((a) => (ROLE_STATUSES[a] ?? []).includes(lead.status));
 };
 
+/**
+ * Can `user` VIEW `lead`? Everyone who can act on it, plus the read-only VIEWER
+ * access (every lead). Read endpoints only — actions keep using canAccessLead, so
+ * pairing VIEWER with another access never widens what that user can change.
+ */
+export const canViewLead = (user, lead) => canAccessLead(user, lead) || canViewAllLeads(user);
+
+const notFound = () => {
+  const err = new Error('Lead not found.');
+  err.status = 404;
+  return err;
+};
+
 /** Throw a 404 (never reveal existence) when access is denied. */
 export const assertLeadAccess = (user, lead) => {
-  if (!canAccessLead(user, lead)) {
-    const err = new Error('Lead not found.');
-    err.status = 404;
-    throw err;
-  }
+  if (!canAccessLead(user, lead)) throw notFound();
+};
+
+/** Read-only counterpart of assertLeadAccess (see canViewLead). */
+export const assertLeadViewAccess = (user, lead) => {
+  if (!canViewLead(user, lead)) throw notFound();
 };
 
 /**

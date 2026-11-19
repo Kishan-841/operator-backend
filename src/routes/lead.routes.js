@@ -72,7 +72,7 @@ const router = Router();
 router.use(auth);
 
 // --- Reads (literal paths before '/:id') ---
-router.get('/', requireRole('SALES_USER'), getLeads);
+router.get('/', requireRole('SALES_USER', 'VIEWER'), getLeads);
 router.get('/sidebar-counts', sidebarCounts); // any authenticated staff
 router.get('/aggregator-options', aggregatorOptions); // any authenticated staff
 
@@ -99,7 +99,7 @@ router.get('/nocl3/records', requireRole('NOC_L3_USER'), nocRecordsQueue);
 router.get('/l3-to-l2/queue', requireRole('NOC_L2_USER', 'NOC_L3_USER'), l3ToL2Queue);
 router.get('/client-handover/queue', requireRole('SALES_USER'), clientHandoverQueue);
 router.get('/agreement/queue', requireRole('SOFTWARE_USER'), agreementQueue);
-router.get('/:id', requireRole('SALES_USER'), getLead);
+router.get('/:id', requireRole('SALES_USER', 'VIEWER'), getLead);
 // Note timeline for a lead — any authenticated user (read-only context).
 router.get('/:id/notes', getLeadNotes);
 
@@ -121,8 +121,8 @@ router.post('/:id/reject', requireRole('SUPER_ADMIN', 'ADMIN'), rejectLead);
 // --- Documents (SALES at stage 5; SOFTWARE attaches the agreement at stage 15) ---
 router.post('/:id/documents', requireRole('SALES_USER', 'SOFTWARE_USER'), uploadSingle('file'), uploadDocument);
 // Documents are sales/software territory (approved visibility matrix).
-router.get('/:id/documents', requireRole('SALES_USER', 'SOFTWARE_USER'), listDocuments);
-router.get('/:id/documents/:docId/download', requireRole('SALES_USER', 'SOFTWARE_USER'), downloadDocument);
+router.get('/:id/documents', requireRole('SALES_USER', 'SOFTWARE_USER', 'VIEWER'), listDocuments);
+router.get('/:id/documents/:docId/download', requireRole('SALES_USER', 'SOFTWARE_USER', 'VIEWER'), downloadDocument);
 router.delete('/:id/documents/:docId', requireRole('SALES_USER', 'SOFTWARE_USER'), deleteDocument);
 // Stage-11 docs verification (SOFTWARE).
 router.patch('/:id/documents/:docId/verification', requireRole('SOFTWARE_USER'), setDocumentVerification);

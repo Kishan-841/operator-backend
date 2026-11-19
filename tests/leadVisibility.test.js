@@ -108,3 +108,26 @@ test('multi-access requirement visibility is the union of each access', () => {
   assert.equal(out.requirementDetails.ratePerUser, 90);
   assert.equal('bankDetails' in out.requirementDetails, false);
 });
+
+test('VIEWER sees every lead detail except money and the portal password', () => {
+  const user = { role: 'VIEWER', accesses: ['VIEWER'] };
+  const lead = {
+    ...fullLead(),
+    portalUsername: 'acme',
+    portalPassword: 'secret',
+    nocL2Config: { switch: 'sw1' },
+    ipAllocation: { BNG: [{ vlan: '100' }] },
+    approvedAt: '2026-11-01',
+  };
+  const out = stripLeadForRole(user, lead);
+  for (const k of ['contactPersonName', 'phone', 'email', 'areaName', 'notes', 'portalUsername', 'nocL2Config', 'ipAllocation', 'approvedAt']) {
+    assert.ok(k in out, `viewer sees ${k}`);
+  }
+  for (const k of ['pricing', 'approvalNotes', 'pricingRevisionReason', 'pricingRevisionCount', 'portalPassword']) {
+    assert.equal(k in out, false, `viewer must not see ${k}`);
+  }
+  assert.equal(out.requirementDetails.estimatedUserCount, 500);
+  for (const k of ['ratePerUser', 'percentageSplit', 'fixedRate', 'rateType', 'bankDetails']) {
+    assert.equal(k in out.requirementDetails, false, `viewer must not see requirementDetails.${k}`);
+  }
+});

@@ -29,6 +29,7 @@ enum Role {
   NOC_L2_USER
   NOC_L3_USER
   SOFTWARE_USER
+  VIEWER // read-only: views every lead, its notes and documents; never mutates
 }
 
 enum LeadCategory {

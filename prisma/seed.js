@@ -19,6 +19,7 @@ const USERS = [
   { role: 'NOC_L2_USER', name: 'NOC L2', email: 'nocl2@email.com' },
   { role: 'NOC_L3_USER', name: 'NOC L3', email: 'nocl3@email.com' },
   { role: 'SOFTWARE_USER', name: 'Software', email: 'software@email.com' },
+  { role: 'VIEWER', name: 'Read Only', email: 'viewer@email.com' },
 ];
 
 async function main() {

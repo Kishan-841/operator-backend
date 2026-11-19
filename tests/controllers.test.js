@@ -56,6 +56,7 @@ before(async () => {
   tokens.nocL2 = await login('NOC_L2_USER');
   tokens.nocL3 = await login('NOC_L3_USER');
   tokens.software = await login('SOFTWARE_USER');
+  tokens.viewer = await login('VIEWER');
 });
 
 beforeEach(cleanup);
@@ -1065,6 +1066,95 @@ test('stage roles see only their stages in a lead notes timeline', async () => {
 
   const asSales = await request('GET', `/api/leads/${lead.id}/notes`, { token: tokens.sales });
   assert.equal(asSales.body.items.length, 3, 'sales owner sees the full timeline');
+});
+
+// ── VIEWER (read-only) ───────────────────────────────────────────────────────
+test('viewer lists every lead, not just their own', async () => {
+  await createLead({ organizationName: 'Owned By Sales', email: 'v1@x.test' });
+  await createLead({ organizationName: 'Owned By Admin', email: 'v2@x.test', assignedSalesId: userId('ADMIN') });
+  const r = await request('GET', '/api/leads', { token: tokens.viewer });
+  assert.equal(r.status, 200);
+  assert.deepEqual(r.body.items.map((l) => l.organizationName).sort(), ['Owned By Admin', 'Owned By Sales']);
+});
+
+test('viewer opens any lead but never sees price, rates, bank details or the portal password', async () => {
+  const lead = await createLead({
+    category: 'JV',
+    phone: '9876543210',
+    city: 'Pune',
+    pricing: { ratePerMonth: 50000 },
+    approvalNotes: 'Approved at 48k',
+    portalUsername: 'acme',
+    portalPassword: 'secret',
+    requirementDetails: { userCount: 100, percentageSplit: 40, bankDetails: { accountNumber: '123' } },
+  });
+  const r = await request('GET', `/api/leads/${lead.id}`, { token: tokens.viewer });
+  assert.equal(r.status, 200);
+  const d = r.body.data;
+  assert.equal(d.phone, '9876543210');
+  assert.equal(d.city, 'Pune');
+  assert.equal(d.portalUsername, 'acme');
+  assert.equal(d.requirementDetails.userCount, 100);
+  for (const hidden of ['pricing', 'approvalNotes', 'portalPassword']) {
+    assert.ok(!(hidden in d), `${hidden} hidden`);
+  }
+  assert.ok(!('percentageSplit' in d.requirementDetails), 'revenue split hidden');
+  assert.ok(!('bankDetails' in d.requirementDetails), 'bank details hidden');
+});
+
+test('viewer cannot create, edit, delete or move a lead', async () => {
+  const lead = await createLead();
+  const attempts = [
+    ['POST', '/api/leads', validLead()],
+    ['PUT', `/api/leads/${lead.id}`, validLead()],
+    ['DELETE', `/api/leads/${lead.id}`, undefined],
+    ['POST', `/api/leads/${lead.id}/submit-feasibility`, {}],
+    ['POST', '/api/leads/bulk', { rows: [] }],
+  ];
+  for (const [method, path, body] of attempts) {
+    const r = await request(method, path, { token: tokens.viewer, body });
+    assert.equal(r.status, 403, `${method} ${path}`);
+  }
+  assert.equal((await prisma.lead.findUnique({ where: { id: lead.id } })).status, 'NEW');
+});
+
+test('viewer reads documents and notes, minus pricing/approval notes', async () => {
+  const lead = await createLead({ status: 'NOC_L2_PENDING' });
+  await addDocument(lead.id, 'PAN');
+  await prisma.leadNote.createMany({
+    data: [
+      { leadId: lead.id, stage: 'LEAD', body: 'created' },
+      { leadId: lead.id, stage: 'PRICING', body: 'quoted 50k' },
+      { leadId: lead.id, stage: 'APPROVAL', body: 'approved at 48k' },
+      { leadId: lead.id, stage: 'NOC_L2', body: 'switch configured' },
+    ],
+  });
+  const docs = await request('GET', `/api/leads/${lead.id}/documents`, { token: tokens.viewer });
+  assert.equal(docs.status, 200);
+  assert.equal(docs.body.items.length, 1);
+
+  const notes = await request('GET', `/api/leads/${lead.id}/notes`, { token: tokens.viewer });
+  assert.deepEqual(notes.body.items.map((n) => n.stage).sort(), ['LEAD', 'NOC_L2']);
+
+  const upload = await request('DELETE', `/api/leads/${lead.id}/documents/${docs.body.items[0].id}`, { token: tokens.viewer });
+  assert.equal(upload.status, 403, 'cannot delete a document');
+});
+
+test('VIEWER paired with SALES still cannot act on another owner\'s lead', async () => {
+  const other = await createLead({ assignedSalesId: userId('ADMIN'), email: 'other-owner@x.test' });
+  const me = await prisma.user.findUnique({ where: { id: userId('SALES_USER') } });
+  await prisma.user.update({ where: { id: me.id }, data: { accesses: ['SALES_USER', 'VIEWER'] } });
+  try {
+    const token = await login('SALES_USER');
+    const view = await request('GET', `/api/leads/${other.id}`, { token });
+    assert.equal(view.status, 200, 'can view it');
+    const act = await request('POST', `/api/leads/${other.id}/submit-feasibility`, { token, body: {} });
+    assert.equal(act.status, 404, 'cannot act on it');
+    const edit = await request('PUT', `/api/leads/${other.id}`, { token, body: validLead() });
+    assert.equal(edit.status, 404, 'cannot edit it');
+  } finally {
+    await prisma.user.update({ where: { id: me.id }, data: { accesses: ['SALES_USER'] } });
+  }
 });
 
 test('ISP lead accepts the MIX_BANDWIDTH type with a spec', async () => {
