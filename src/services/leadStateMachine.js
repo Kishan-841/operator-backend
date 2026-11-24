@@ -8,7 +8,7 @@ import { hasAccess } from '../utils/roleHelper.js';
 import { AGREEMENT_DOC_TYPE } from '../utils/documentTypes.js';
 import { missingRequiredDocs } from '../utils/docRequirements.js';
 import { generateDeliveryRequestNumber } from './leadNumber.service.js';
-import { KNOWN_AGGREGATORS, BNG_CLASS, requiredKeysFor, MULTI_L3_KEYS, toPoolList } from '../utils/nocL3Fields.js';
+import { KNOWN_AGGREGATORS, BNG_CLASS, OPTIONAL_L3_TYPES, requiredKeysFor, MULTI_L3_KEYS, toPoolList } from '../utils/nocL3Fields.js';
 
 // Append to a delivery request's audit trail. Soft-fail — never break the flow.
 const logDeliveryRequest = async ({ deliveryRequestId, action, actor, details = null }) => {
@@ -1010,13 +1010,26 @@ const buildIpAllocation = (selections, ipAllocation) => {
   // When a BNG-class aggregator (BNG / BIRAS) is selected, MIKROTIK configs are
   // optional — it carries the aggregation. All-or-nothing: leave MIKROTIK fully
   // out, or provide every unit.
+  //
+  // BNG / BIRAS fields are all optional: blank units are dropped, a partly
+  // filled unit is kept as-is, and the type is left out when nothing was entered.
   const hasBng = selections.some((s) => BNG_CLASS.includes(s.type));
+  const unitBlank = (u) =>
+    !u || typeof u !== 'object' ||
+    Object.values(u).every((v) => (Array.isArray(v) ? toPoolList(v).length === 0 : !String(v ?? '').trim()));
   const stored = {};
   for (const { type, quantity } of selections) {
     const required = requiredKeysFor(type);
-    const units = Array.isArray(alloc[type]) ? alloc[type] : [];
-    if (type === 'MIKROTIK' && hasBng && units.length === 0) continue; // bypassed
-    if (units.length !== quantity) {
+    let units = Array.isArray(alloc[type]) ? alloc[type] : [];
+    if (OPTIONAL_L3_TYPES.includes(type)) {
+      units = units.filter((u) => !unitBlank(u));
+      if (units.length > quantity) {
+        throw httpError(400, `Provide at most ${quantity} ${type} configuration${quantity === 1 ? '' : 's'}.`);
+      }
+      if (units.length === 0) continue; // skipped
+    } else if (type === 'MIKROTIK' && hasBng && units.length === 0) {
+      continue; // bypassed
+    } else if (units.length !== quantity) {
       throw httpError(400, `Provide ${quantity} ${type} configuration${quantity === 1 ? '' : 's'}.`);
     }
     // A required key is present if it has a non-empty value — for a multi key

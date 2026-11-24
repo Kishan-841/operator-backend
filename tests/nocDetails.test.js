@@ -55,10 +55,10 @@ test('IP allocation edit is validated against the current aggregator selection',
   const lead = await nocLead({ status: 'CLIENT_HANDOVER_PENDING' });
   const updated = await sm.updateNocDetails({ leadId: lead.id, actor: L3(), ipAllocation: { BNG: [bng('300')] } });
   assert.equal(updated.ipAllocation.BNG[0].vlan, '300');
-  await rejectsWithStatus(
-    () => sm.updateNocDetails({ leadId: lead.id, actor: L3(), ipAllocation: { BNG: [{ vlan: '1' }] } }),
-    400,
-  );
+  // BNG fields are optional, so a partly filled unit saves as entered…
+  const partial = await sm.updateNocDetails({ leadId: lead.id, actor: L3(), ipAllocation: { BNG: [{ vlan: '1' }] } });
+  assert.deepEqual(partial.ipAllocation, { BNG: [{ vlan: '1' }] });
+  // …but more units than the selected quantity is still rejected.
   await rejectsWithStatus(
     () => sm.updateNocDetails({ leadId: lead.id, actor: L3(), ipAllocation: { BNG: [bng(), bng()] } }),
     400,

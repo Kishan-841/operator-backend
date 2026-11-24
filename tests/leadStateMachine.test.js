@@ -787,14 +787,6 @@ test('BIRAS is a built-in with BNG’s field set and also makes MIKROTIK optiona
   assert.equal(await prisma.aggregatorType.count({ where: { name: 'BIRAS' } }), 0);
 
   await prisma.lead.update({ where: { id: lead.id }, data: { status: 'NOC_L3_PENDING' } });
-  // Same required keys as BNG — an incomplete BIRAS unit is rejected.
-  await rejectsWithStatus(
-    () => sm.completeNocL3({
-      leadId: lead.id, actor: actor('NOC_L3_USER'),
-      ipAllocation: { BIRAS: [{ mikrotikIp: '10.0.0.2', mikrotikIdentity: 'MK-1', loopbackIp: '10.255.0.1', vsi: 'VSI-1' }] },
-    }),
-    400, // missing vlan
-  );
   // Complete BIRAS alone → advances, MIKROTIK bypassed like it is with BNG.
   const biras = { mikrotikIp: '10.0.0.2', mikrotikIdentity: 'MK-1', loopbackIp: '10.255.0.1', vsi: 'VSI-1', subnetMask: '10.0.0.0/29', vlan: '100' };
   const updated = await sm.completeNocL3({
@@ -816,29 +808,46 @@ test('completeNocL3: MIKROTIK alone stays fully mandatory', async () => {
   );
 });
 
-test('completeNocL3 BNG requires VLAN and VSI', async () => {
+test('completeNocL3: BNG fields are all optional — a partial unit is kept as entered', async () => {
   const lead = await createLead({
     status: 'NOC_L3_PENDING', category: 'PIN_RATE', requirementDetails: {},
     aggregatorSelections: [{ type: 'BNG', quantity: 1 }],
     aggregatorTypes: ['BNG'], aggregatorType: 'BNG',
   });
-  const base = { mikrotikIp: '10.0.0.2', mikrotikIdentity: 'MK-1', loopbackIp: '10.255.0.1', subnetMask: '10.0.0.0/29' };
-  // missing vlan → 400
-  await rejectsWithStatus(
-    () => sm.completeNocL3({ leadId: lead.id, actor: actor('NOC_L3_USER'), ipAllocation: { BNG: [{ ...base, vsi: 'VSI-201' }] } }),
-    400,
-  );
-  // missing vsi → 400
-  await rejectsWithStatus(
-    () => sm.completeNocL3({ leadId: lead.id, actor: actor('NOC_L3_USER'), ipAllocation: { BNG: [{ ...base, vlan: '100' }] } }),
-    400,
-  );
   const updated = await sm.completeNocL3({
     leadId: lead.id, actor: actor('NOC_L3_USER'),
-    ipAllocation: { BNG: [{ ...base, vsi: 'VSI-201', vlan: '100' }] },
+    ipAllocation: { BNG: [{ vlan: '100' }] },
   });
   assert.equal(updated.status, 'L3_TO_L2_HANDOFF');
-  assert.equal(updated.ipAllocation.BNG[0].vlan, '100');
+  assert.deepEqual(updated.ipAllocation, { BNG: [{ vlan: '100' }] });
+});
+
+test('completeNocL3: BNG / BIRAS (and the bypassable MIKROTIK) can be skipped entirely', async () => {
+  for (const type of ['BNG', 'BIRAS']) {
+    const lead = await createLead({
+      status: 'NOC_L3_PENDING', category: 'PIN_RATE', requirementDetails: {},
+      aggregatorSelections: [{ type, quantity: 2 }, { type: 'MIKROTIK', quantity: 1 }],
+      aggregatorTypes: [type, 'MIKROTIK'], aggregatorType: type,
+    });
+    const updated = await sm.completeNocL3({
+      leadId: lead.id, actor: actor('NOC_L3_USER'),
+      ipAllocation: { [type]: [{}, { vlan: '  ' }] }, // nothing real entered
+    });
+    assert.equal(updated.status, 'L3_TO_L2_HANDOFF', type);
+    assert.deepEqual(updated.ipAllocation, {}, `${type}: nothing stored`);
+  }
+});
+
+test('completeNocL3: optional types still cap units at the selected quantity', async () => {
+  const lead = await createLead({
+    status: 'NOC_L3_PENDING', category: 'PIN_RATE', requirementDetails: {},
+    aggregatorSelections: [{ type: 'BIRAS', quantity: 1 }],
+    aggregatorTypes: ['BIRAS'], aggregatorType: 'BIRAS',
+  });
+  await rejectsWithStatus(
+    () => sm.completeNocL3({ leadId: lead.id, actor: actor('NOC_L3_USER'), ipAllocation: { BIRAS: [{ vlan: '1' }, { vlan: '2' }] } }),
+    400,
+  );
 });
 
 test('completeNocL3 requires exactly quantity complete units per selection', async () => {
