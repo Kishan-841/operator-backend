@@ -4,6 +4,7 @@ import { logEvent } from '../services/statusChangeLog.service.js';
 import { actorFromReq } from '../utils/requestContext.js';
 import { assertLeadAccess, assertLeadViewAccess } from '../utils/leadAccess.js';
 import { canonicalDocType } from '../utils/documentTypes.js';
+import { uploadContentType } from '../config/upload.js';
 import { handleError } from '../utils/logger.js';
 import * as sm from '../services/leadStateMachine.js';
 
@@ -39,12 +40,13 @@ export const uploadDocument = async (req, res) => {
     // Type comes from the (extensible) DocumentType list; canonicalise so the
     // agreement type is stored as the exact value the close gate matches on.
     const type = canonicalDocType(req.body.type);
+    const contentType = uploadContentType(req.file); // server-derived, not client-sent
     // leadNumber + type shape the storage key (leads/OPC-0009/GST/…) so the
     // bucket/uploads dir stays organised per lead, per document type.
     const { storageKey, size } = await saveBuffer({
       buffer: req.file.buffer,
       originalName: req.file.originalname,
-      contentType: req.file.mimetype,
+      contentType,
       leadId: id,
       leadNumber: lead.leadNumber,
       docType: type,
@@ -57,7 +59,7 @@ export const uploadDocument = async (req, res) => {
         label: req.body.label || null,
         fileName: req.file.originalname,
         storageKey,
-        mimeType: req.file.mimetype,
+        mimeType: contentType,
         size,
         uploadedById: req.user.id,
       },

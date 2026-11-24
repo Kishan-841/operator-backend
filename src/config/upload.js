@@ -4,18 +4,41 @@ import multer from 'multer';
 // the R2_* env vars are set, local disk otherwise). Documents are small, so
 // memory is fine.
 //
-// Accepted: PDF plus any image type except SVG (SVG can carry scripts). Image
-// extensions are also checked because some browsers send phone photos
-// (HEIC/HEIF) as application/octet-stream.
-const IMAGE_EXTENSIONS = ['png', 'jpg', 'jpeg', 'webp', 'gif', 'bmp', 'tif', 'tiff', 'heic', 'heif', 'avif'];
+// Accepted: PDF plus common image formats. The extension must be listed AND the
+// browser-sent MIME type must match it, so neither can smuggle in another file
+// (e.g. HTML). SVG is deliberately absent — it can carry scripts. Some browsers
+// send phone photos (HEIC/HEIF) with no type, so those also accept octet-stream.
+const NO_TYPE = ['', 'application/octet-stream'];
+const MIME_BY_EXT = {
+  pdf: ['application/pdf'],
+  png: ['image/png'],
+  jpg: ['image/jpeg', 'image/jpg', 'image/pjpeg'],
+  jpeg: ['image/jpeg', 'image/jpg', 'image/pjpeg'],
+  webp: ['image/webp'],
+  gif: ['image/gif'],
+  bmp: ['image/bmp', 'image/x-ms-bmp'],
+  tif: ['image/tiff'],
+  tiff: ['image/tiff'],
+  heic: ['image/heic', 'image/heic-sequence', ...NO_TYPE],
+  heif: ['image/heif', 'image/heif-sequence', ...NO_TYPE],
+  avif: ['image/avif'],
+};
+
+const extOf = (name) => {
+  const parts = String(name || '').toLowerCase().split('.');
+  return parts.length > 1 ? parts.pop() : '';
+};
 
 export const isAllowedUpload = ({ mimetype = '', originalname = '' } = {}) => {
-  const mime = String(mimetype).toLowerCase();
-  const ext = String(originalname).split('.').pop().toLowerCase();
-  if (mime === 'image/svg+xml' || ext === 'svg') return false;
-  if (mime === 'application/pdf' || ext === 'pdf') return true;
-  return mime.startsWith('image/') || IMAGE_EXTENSIONS.includes(ext);
+  const allowed = MIME_BY_EXT[extOf(originalname)];
+  return Boolean(allowed) && allowed.includes(String(mimetype).toLowerCase());
 };
+
+/**
+ * Content type to store and serve for an accepted upload — derived from the
+ * extension, never the browser-sent MIME type.
+ */
+export const uploadContentType = ({ originalname = '' } = {}) => MIME_BY_EXT[extOf(originalname)]?.[0] ?? 'application/octet-stream';
 
 const upload = multer({
   storage: multer.memoryStorage(),
