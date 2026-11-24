@@ -3,14 +3,26 @@ import multer from 'multer';
 // Files are held in memory then handed to storage.service (Cloudflare R2 when
 // the R2_* env vars are set, local disk otherwise). Documents are small, so
 // memory is fine.
-const ALLOWED = ['application/pdf', 'image/png', 'image/jpeg', 'image/jpg', 'image/webp'];
+//
+// Accepted: PDF plus any image type except SVG (SVG can carry scripts). Image
+// extensions are also checked because some browsers send phone photos
+// (HEIC/HEIF) as application/octet-stream.
+const IMAGE_EXTENSIONS = ['png', 'jpg', 'jpeg', 'webp', 'gif', 'bmp', 'tif', 'tiff', 'heic', 'heif', 'avif'];
+
+export const isAllowedUpload = ({ mimetype = '', originalname = '' } = {}) => {
+  const mime = String(mimetype).toLowerCase();
+  const ext = String(originalname).split('.').pop().toLowerCase();
+  if (mime === 'image/svg+xml' || ext === 'svg') return false;
+  if (mime === 'application/pdf' || ext === 'pdf') return true;
+  return mime.startsWith('image/') || IMAGE_EXTENSIONS.includes(ext);
+};
 
 const upload = multer({
   storage: multer.memoryStorage(),
   limits: { fileSize: 10 * 1024 * 1024 }, // 10 MB
   fileFilter: (_req, file, cb) => {
-    if (ALLOWED.includes(file.mimetype)) cb(null, true);
-    else cb(new Error('Only PDF and image files (png/jpg/webp) are allowed.'));
+    if (isAllowedUpload(file)) cb(null, true);
+    else cb(new Error('Only PDF and image files (JPG, PNG, HEIC, WEBP, GIF, …) are allowed.'));
   },
 });
 
