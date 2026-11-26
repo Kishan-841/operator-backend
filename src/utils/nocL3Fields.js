@@ -39,3 +39,10 @@ export const GENERIC_L3_FIELD_KEYS = ['identity', 'ip', 'gateway', 'subnetMask',
 export const requiredKeysFor = (type) =>
   OPTIONAL_L3_TYPES.includes(type) ? [] : NOC_L3_FIELD_KEYS[type] || GENERIC_L3_FIELD_KEYS;
 export const allowedKeysFor = (type) => NOC_L3_FIELD_KEYS[type] || [...GENERIC_L3_FIELD_KEYS, 'notes'];
+
+// Monitoring entries ticked at the L3→L2 handoff (stored on nocL2Config.software).
+export const MONITORING_SOFTWARE_KEYS = ['opm', 'dude', 'cacti', 'logifyMail'];
+
+/** Coerce a submitted software map to { key: boolean } for every monitoring key. */
+export const normalizeMonitoringSoftware = (raw) =>
+  Object.fromEntries(MONITORING_SOFTWARE_KEYS.map((k) => [k, Boolean(raw?.[k])]));

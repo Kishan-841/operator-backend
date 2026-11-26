@@ -1068,6 +1068,53 @@ test('stage roles see only their stages in a lead notes timeline', async () => {
   assert.equal(asSales.body.items.length, 3, 'sales owner sees the full timeline');
 });
 
+// ── Admin full lead record ───────────────────────────────────────────────────
+test('GET /api/leads/:id/record is admin-only and returns documents + notes', async () => {
+  const lead = await createLead();
+  await addDocument(lead.id, 'PAN');
+  const r = await request('GET', `/api/leads/${lead.id}/record`, { token: tokens.admin });
+  assert.equal(r.status, 200);
+  assert.equal(r.body.data.documents.length, 1);
+  assert.ok(Array.isArray(r.body.data.noteEntries));
+  for (const token of [tokens.sales, tokens.viewer, tokens.software]) {
+    assert.equal((await request('GET', `/api/leads/${lead.id}/record`, { token })).status, 403);
+  }
+});
+
+test('PATCH /api/leads/:id/record/:section saves with a reason and returns field errors', async () => {
+  const lead = await createLead();
+  const ok = await request('PATCH', `/api/leads/${lead.id}/record/approval`, {
+    token: tokens.admin, body: { data: { approvalNotes: 'Approved on call' }, reason: 'Recording verbal approval' },
+  });
+  assert.equal(ok.status, 200);
+  assert.equal(ok.body.data.approvalNotes, 'Approved on call');
+  const noReason = await request('PATCH', `/api/leads/${lead.id}/record/approval`, {
+    token: tokens.admin, body: { data: { approvalNotes: 'x' } },
+  });
+  assert.equal(noReason.status, 400);
+  const bad = await request('PATCH', `/api/leads/${lead.id}/record/lead`, {
+    token: tokens.admin, body: { data: { ...validLead(), email: 'nope' }, reason: 'fix email' },
+  });
+  assert.equal(bad.status, 400);
+  assert.ok(bad.body.errors.some((e) => e.path === 'email'));
+  const forbidden = await request('PATCH', `/api/leads/${lead.id}/record/approval`, {
+    token: tokens.sales, body: { data: { approvalNotes: 'x' }, reason: 'because' },
+  });
+  assert.equal(forbidden.status, 403);
+});
+
+test('closed-lead documents: only an admin with a reason may delete them', async () => {
+  const lead = await createLead({ status: 'COMPLETED' });
+  const doc = await addDocument(lead.id, 'PAN', { storageKey: `test/missing-${Date.now()}.pdf` });
+  const url = `/api/leads/${lead.id}/documents/${doc.id}`;
+  assert.equal((await request('DELETE', url, { token: tokens.sales })).status, 409);
+  assert.equal((await request('DELETE', url, { token: tokens.admin })).status, 400, 'reason required');
+  const r = await request('DELETE', url, { token: tokens.admin, body: { reason: 'Uploaded to the wrong lead' } });
+  assert.equal(r.status, 200);
+  const ev = await prisma.statusChangeLog.findFirst({ where: { entityId: lead.id, action: 'DOC_DELETED' } });
+  assert.equal(ev.reason, 'Uploaded to the wrong lead');
+});
+
 // ── VIEWER (read-only) ───────────────────────────────────────────────────────
 test('viewer lists every lead, not just their own', async () => {
   await createLead({ organizationName: 'Owned By Sales', email: 'v1@x.test' });

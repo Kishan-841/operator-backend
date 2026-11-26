@@ -7,6 +7,7 @@ import { validateIpDetails } from '../validation/ipDetails.js';
 import { validateMaterialReq } from '../validation/stage4.js';
 import { validateAggregator, validateIpAllocation } from '../validation/stage5.js';
 import { actorFromReq } from '../utils/requestContext.js';
+import { MONITORING_SOFTWARE_KEYS, normalizeMonitoringSoftware } from '../utils/nocL3Fields.js';
 
 // Free-text body fields (notes / reason / config notes / portal creds) must be
 // strings — coerce anything else to null so a stray object/number can't reach
@@ -264,14 +265,10 @@ export const completeInstallation = async (req, res) => {
   }
 };
 
-/** POST /api/leads/:id/noc-l2 (NOC_L2) { configNotes?, config? } */
-const SOFTWARE_KEYS = ['opm', 'dude', 'cacti', 'logifyMail'];
-const normalizeSoftware = (raw) => {
-  const software = {};
-  for (const k of SOFTWARE_KEYS) software[k] = Boolean(raw?.[k]);
-  return software;
-};
+const SOFTWARE_KEYS = MONITORING_SOFTWARE_KEYS;
+const normalizeSoftware = normalizeMonitoringSoftware;
 
+/** POST /api/leads/:id/noc-l2 (NOC_L2) { configNotes?, config? } */
 export const completeNocL2 = async (req, res) => {
   try {
     // Stage 9 captures only the switch/port config type; the monitoring software

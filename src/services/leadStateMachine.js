@@ -105,7 +105,7 @@ const BACKUP_ROUTE_KEYS = ['SECONDARY', 'TERTIARY', 'FOURTH'];
 // validation/feasibilityVendors. Returns the two stored columns:
 // { feasibilityVendors: PRIMARY, feasibilityBackupRoutes: { SECONDARY, … } }.
 // Throws 400 on an empty Primary or a missing vendor.
-const resolveFiberRoutes = async (routes) => {
+export const resolveFiberRoutes = async (routes) => {
   const primary = routes?.PRIMARY;
   if (!Array.isArray(primary) || primary.length === 0) {
     throw httpError(400, 'Add at least one fiber segment to the Primary route.');
@@ -877,7 +877,7 @@ export const completeNocL2 = ({ leadId, actor, config, notes }) =>
 // shared AggregatorType master on first use.
 // Aggregator selections must be non-empty, and BGP is an ISP-only option
 // (everything else applies to every category). Shared by stage 10 + NOC edits.
-const assertAggregatorSelections = (category, selections) => {
+export const assertAggregatorSelections = (category, selections) => {
   const list = Array.isArray(selections) ? selections : [];
   if (!list.length) throw httpError(400, 'Select at least one aggregator type.');
   if (category !== 'ISP' && list.some((s) => s.type === 'BGP')) {
@@ -888,7 +888,7 @@ const assertAggregatorSelections = (category, selections) => {
 
 // Register custom aggregator names in the shared master list. Soft-fail
 // (CLAUDE.md §9): a master-write error must never roll back the business write.
-const registerCustomAggregators = async (list, actor) => {
+export const registerCustomAggregators = async (list, actor) => {
   for (const s of list) {
     if (KNOWN_AGGREGATORS.includes(s.type)) continue;
     try {
@@ -996,7 +996,7 @@ export const completeNocL3 = async ({ leadId, actor, ipAllocation }) => {
 
 // A lead's aggregator selections: selections → types-array (qty 1 each) →
 // single legacy column → Mikrotik.
-const aggregatorSelectionsOf = (lead) =>
+export const aggregatorSelectionsOf = (lead) =>
   Array.isArray(lead.aggregatorSelections) && lead.aggregatorSelections.length
     ? lead.aggregatorSelections
     : (lead.aggregatorTypes?.length ? lead.aggregatorTypes : [lead.aggregatorType || 'MIKROTIK'])

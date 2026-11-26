@@ -8,6 +8,7 @@ import {
   rejectDuplicateApproval,
 } from '../controllers/duplicateApproval.controller.js';
 import { generateAgreement } from '../controllers/agreement.controller.js';
+import { getRecord, updateRecordSection } from '../controllers/lead.record.controller.js';
 import {
   feasibilityQueue,
   feasibilityReviewedQueue,
@@ -100,6 +101,9 @@ router.get('/l3-to-l2/queue', requireRole('NOC_L2_USER', 'NOC_L3_USER'), l3ToL2Q
 router.get('/client-handover/queue', requireRole('SALES_USER'), clientHandoverQueue);
 router.get('/agreement/queue', requireRole('SOFTWARE_USER'), agreementQueue);
 router.get('/:id', requireRole('SALES_USER', 'VIEWER'), getLead);
+// Admin full record: every stage's data, editable any time (status untouched).
+router.get('/:id/record', requireRole('SUPER_ADMIN', 'ADMIN'), getRecord);
+router.patch('/:id/record/:section', requireRole('SUPER_ADMIN', 'ADMIN'), updateRecordSection);
 // Note timeline for a lead — any authenticated user (read-only context).
 router.get('/:id/notes', getLeadNotes);
 

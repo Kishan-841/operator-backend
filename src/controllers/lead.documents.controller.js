@@ -3,6 +3,13 @@ import { saveBuffer, sendDownload, removeFile } from '../services/storage.servic
 import { logEvent } from '../services/statusChangeLog.service.js';
 import { actorFromReq } from '../utils/requestContext.js';
 import { assertLeadAccess, assertLeadViewAccess } from '../utils/leadAccess.js';
+import { isAdmin } from '../utils/roleHelper.js';
+
+// Optional "reason for change" sent by the admin lead record page; logged with the event.
+const reasonOf = (req) => {
+  const r = typeof req.body?.reason === 'string' ? req.body.reason.trim() : '';
+  return r ? r.slice(0, 500) : null;
+};
 import { canonicalDocType } from '../utils/documentTypes.js';
 import { uploadContentType } from '../config/upload.js';
 import { handleError } from '../utils/logger.js';
@@ -72,6 +79,7 @@ export const uploadDocument = async (req, res) => {
       entityType: 'Lead',
       entityId: id,
       summary: `Uploaded document "${doc.fileName}" (${type})`,
+      reason: reasonOf(req),
       actor: actorFromReq(req),
     });
     return res.status(201).json({ message: 'Document uploaded.', data: doc });
@@ -226,10 +234,15 @@ export const deleteDocument = async (req, res) => {
     });
     if (!doc) return res.status(404).json({ message: 'Document not found.' });
     assertLeadAccess(req.user, doc.lead);
-    // Never remove documents from a closed lead — preserves the signed agreement
-    // and other evidence on COMPLETED/REJECTED deals.
+    // Documents on a closed lead (COMPLETED/REJECTED) are evidence — only an
+    // admin may remove one, and only with a reason for the event log.
     if (['COMPLETED', 'REJECTED'].includes(doc.lead.status)) {
-      return res.status(409).json({ message: 'Documents on a closed lead cannot be deleted.' });
+      if (!isAdmin(req.user)) {
+        return res.status(409).json({ message: 'Documents on a closed lead cannot be deleted.' });
+      }
+      if (!reasonOf(req)) {
+        return res.status(400).json({ message: 'Give a reason to delete a document from a closed lead.' });
+      }
     }
     await prisma.leadDocument.delete({ where: { id: doc.id } });
     await removeFile(doc.storageKey);
@@ -239,6 +252,7 @@ export const deleteDocument = async (req, res) => {
       entityType: 'Lead',
       entityId: req.params.id,
       summary: `Deleted document "${doc.fileName}"`,
+      reason: reasonOf(req),
       actor: actorFromReq(req),
     });
     return res.json({ message: 'Document deleted.' });
