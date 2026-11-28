@@ -1614,8 +1614,57 @@ test('POST /api/pop-locations stores either a POP type or a junction type', asyn
   assert.equal(junction.body.data.junctionType, '4w FTA');
 });
 
+test('junctions get JN- IDs, and switching a location type moves it to the other series', async () => {
+  await prisma.counter.deleteMany({ where: { key: { in: ['POP', 'JN'] } } });
+  const { popType, ...base } = popBody;
+  const jn = await request('POST', '/api/pop-locations', { token: tokens.feasibility, body: { ...base, name: 'Junction A', junctionType: 'JC 48F' } });
+  assert.equal(jn.body.data.popCode, 'JN-001');
+  const bulk = await request('POST', '/api/pop-locations/bulk', {
+    token: tokens.feasibility,
+    body: { rows: [
+      { name: 'Bulk POP', latitude: 19, longitude: 72, popType: '10G' },
+      { name: 'Bulk JN', latitude: 19, longitude: 72, junctionType: 'JC 96F' },
+    ] },
+  });
+  assert.equal(bulk.body.created, 2);
+  const list = await request('GET', '/api/pop-locations', { token: tokens.feasibility });
+  const codes = Object.fromEntries(list.body.items.map((p) => [p.name, p.popCode]));
+  assert.equal(codes['Bulk POP'], 'POP-001');
+  assert.equal(codes['Bulk JN'], 'JN-002');
+
+  const switched = await request('PUT', `/api/pop-locations/${jn.body.data.id}`, {
+    token: tokens.admin, body: { ...base, name: 'Junction A', popType: '1G' },
+  });
+  assert.equal(switched.body.data.popCode, 'POP-002', 'junction → POP takes the next POP ID');
+  const same = await request('PUT', `/api/pop-locations/${jn.body.data.id}`, {
+    token: tokens.admin, body: { ...base, name: 'Junction A renamed', popType: '10G' },
+  });
+  assert.equal(same.body.data.popCode, 'POP-002', 'an edit within the same series keeps the ID');
+});
+
+test('admins can set a POP ID by hand; format, duplicates and role are enforced', async () => {
+  await prisma.counter.deleteMany({ where: { key: { in: ['POP', 'JN'] } } });
+  const a = await request('POST', '/api/pop-locations', { token: tokens.feasibility, body: { ...popBody, name: 'Manual A' } });
+  const b = await request('POST', '/api/pop-locations', { token: tokens.feasibility, body: { ...popBody, name: 'Manual B' } });
+  const url = `/api/pop-locations/${a.body.data.id}`;
+  const put = (token, popCode) => request('PUT', url, { token, body: { ...popBody, name: 'Manual A', popCode } });
+
+  assert.equal((await put(tokens.feasibility, 'POP-050')).status, 403, 'feasibility cannot change IDs');
+  assert.equal((await put(tokens.admin, 'JN-050')).status, 400, 'a POP needs a POP- ID');
+  assert.equal((await put(tokens.admin, 'POP-5')).status, 400, 'at least 3 digits');
+  assert.equal((await put(tokens.admin, b.body.data.popCode)).status, 409, 'duplicate rejected');
+
+  const ok = await put(tokens.admin, ' pop-050 ');
+  assert.equal(ok.status, 200);
+  assert.equal(ok.body.data.popCode, 'POP-050');
+  const next = await request('POST', '/api/pop-locations', { token: tokens.feasibility, body: { ...popBody, name: 'After manual' } });
+  assert.equal(next.body.data.popCode, 'POP-051', 'the counter skips past a hand-picked ID');
+  const unchanged = await request('PUT', url, { token: tokens.feasibility, body: { ...popBody, name: 'Manual A', popCode: 'POP-050' } });
+  assert.equal(unchanged.status, 200, 'sending the current ID back is not a change');
+});
+
 test('new POPs get sequential POP IDs (single create and bulk import) and are searchable by ID', async () => {
-  await prisma.counter.deleteMany({ where: { key: 'POP' } });
+  await prisma.counter.deleteMany({ where: { key: { in: ['POP', 'JN'] } } });
   const one = await request('POST', '/api/pop-locations', { token: tokens.feasibility, body: { ...popBody, name: 'POP Coded' } });
   assert.match(one.body.data.popCode, /^POP-\d{3,}$/);
   const bulk = await request('POST', '/api/pop-locations/bulk', {

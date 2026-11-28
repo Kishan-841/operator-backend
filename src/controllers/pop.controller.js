@@ -2,7 +2,10 @@ import prisma from '../config/db.js';
 import { logEvent } from '../services/statusChangeLog.service.js';
 import { actorFromReq } from '../utils/requestContext.js';
 import { parsePagination, paginatedResponse } from '../utils/pagination.js';
-import { generatePopCode, reservePopCodes } from '../services/popCode.service.js';
+import {
+  generateLocationCode, codesForRows, codeMatchesSeries, seriesFor, parseManualCode, claimManualCode,
+} from '../services/popCode.service.js';
+import { isAdmin } from '../utils/roleHelper.js';
 
 const isValidCoord = (v, max) => typeof v === 'number' && Number.isFinite(v) && Math.abs(v) <= max;
 
@@ -95,7 +98,7 @@ export const createPopLocation = async (req, res) => {
 
     const data = await prisma.$transaction(async (tx) =>
       tx.popLocation.create({
-        data: { ...fields, popCode: await generatePopCode(tx), createdById: req.user.id },
+        data: { ...fields, popCode: await generateLocationCode(tx, fields), createdById: req.user.id },
       }),
     );
 
@@ -132,13 +135,44 @@ export const updatePopLocation = async (req, res) => {
     });
     if (clash) return res.status(409).json({ message: 'A POP with this name already exists.' });
 
-    const data = await prisma.popLocation.update({ where: { id: current.id }, data: fields });
+    // An admin may set the ID by hand (popCode in the body, when it differs).
+    let manualCode = null;
+    if (req.body?.popCode !== undefined && req.body.popCode !== null && req.body.popCode !== current.popCode) {
+      if (!isAdmin(req.user)) return res.status(403).json({ message: 'Only admins can change a POP ID.' });
+      const parsed = parseManualCode(req.body.popCode, fields);
+      if (parsed.error) return res.status(400).json({ message: parsed.error });
+      if (parsed.code !== current.popCode) {
+        const taken = await prisma.popLocation.findFirst({
+          where: { popCode: { equals: parsed.code, mode: 'insensitive' }, id: { not: current.id } },
+          select: { name: true },
+        });
+        if (taken) return res.status(409).json({ message: `${parsed.code} is already used by "${taken.name}".` });
+        manualCode = parsed.code;
+      }
+    }
+
+    const data = await prisma.$transaction(async (tx) => {
+      let popCode;
+      if (manualCode) {
+        await claimManualCode(tx, manualCode, fields);
+        popCode = manualCode;
+      } else if (!codeMatchesSeries(current.popCode, seriesFor(fields))) {
+        // Switching POP ↔ junction moves the location to the other ID series.
+        popCode = await generateLocationCode(tx, fields);
+      }
+      return tx.popLocation.update({
+        where: { id: current.id },
+        data: { ...fields, ...(popCode ? { popCode } : {}) },
+      });
+    });
 
     await logEvent({
       action: 'POP_UPDATED',
       entityType: 'PopLocation',
       entityId: data.id,
-      summary: `Updated POP ${data.popCode ?? ''} "${data.name}" (${data.latitude}, ${data.longitude}; ${data.popType ?? data.junctionType})`,
+      summary:
+        `Updated ${data.popCode ?? 'POP'} "${data.name}" (${data.latitude}, ${data.longitude}; ${data.popType ?? data.junctionType})` +
+        (current.popCode && current.popCode !== data.popCode ? ` — ID ${current.popCode} → ${data.popCode}` : ''),
       actor: actorFromReq(req),
     });
     return res.json({ message: 'POP location updated.', data });
@@ -223,9 +257,9 @@ export const bulkCreatePopLocations = async (req, res) => {
     });
 
     if (toCreate.length) {
-      // One counter bump for the whole file; codes follow the spreadsheet order.
+      // One counter bump per series (POP / JN); IDs follow the spreadsheet order.
       await prisma.$transaction(async (tx) => {
-        const codes = await reservePopCodes(tx, toCreate.length);
+        const codes = await codesForRows(tx, toCreate);
         await tx.popLocation.createMany({
           data: toCreate.map((v, i) => ({ ...v, popCode: codes[i], createdById: req.user.id })),
           skipDuplicates: true,
