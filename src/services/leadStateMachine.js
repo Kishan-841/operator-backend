@@ -185,7 +185,7 @@ export const completeFeasibility = async ({
     const uniqueIds = [...new Set(popIds)];
     const found = await prisma.popLocation.findMany({
       where: { id: { in: uniqueIds } },
-      select: { id: true, name: true, latitude: true, longitude: true },
+      select: { id: true, popCode: true, name: true, latitude: true, longitude: true },
     });
     if (found.length !== uniqueIds.length) throw httpError(400, 'A selected POP location no longer exists.');
     const byId = Object.fromEntries(found.map((p) => [p.id, p]));

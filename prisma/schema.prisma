@@ -418,6 +418,11 @@ model DocumentType {
 // once saved, they're searchable + selectable on future leads (CLAUDE.md §3 stage 2).
 model PopLocation {
   id          String   @id @default(uuid())
+  // Human-facing ID (POP-001, POP-002, …) from the 'POP' Counter — assigned on
+  // create, and to older rows at boot (services/popCode.service.js). No
+  // @unique: the counter guarantees it, and the entrypoint's plain
+  // `prisma db push` refuses to add constraints non-interactively.
+  popCode     String?
   name        String   @unique
   latitude    Float
   longitude   Float
@@ -431,6 +436,7 @@ model PopLocation {
   leads       Lead[]
 
   @@index([name])
+  @@index([popCode])
 }
 
 // Fiber / commission / client vendors. Created by ADMIN or SALES_USER, then

@@ -47,7 +47,7 @@ const RECORD_INCLUDE = {
   createdBy: user,
   assignedSales: user,
   distributor: { select: { id: true, name: true, isDefault: true } },
-  popLocation: { select: { id: true, name: true, latitude: true, longitude: true } },
+  popLocation: { select: { id: true, popCode: true, name: true, latitude: true, longitude: true } },
   feasibilityAssignedTo: user,
   approvedBy: user,
   nocL2AssignedTo: user,
@@ -179,7 +179,7 @@ const SECTIONS = {
       if (popIds.length) {
         const found = await prisma.popLocation.findMany({
           where: { id: { in: popIds } },
-          select: { id: true, name: true, latitude: true, longitude: true },
+          select: { id: true, popCode: true, name: true, latitude: true, longitude: true },
         });
         if (found.length !== popIds.length) throw httpError(400, 'A selected POP location no longer exists.');
         const byId = Object.fromEntries(found.map((p) => [p.id, p]));

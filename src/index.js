@@ -2,6 +2,7 @@ import 'dotenv/config';
 import { createServer } from 'http';
 import app from './app.js';
 import { initializeSocket } from './sockets/index.js';
+import { backfillPopCodes } from './services/popCode.service.js';
 
 // Fail fast on missing critical env vars rather than crashing mid-request hours
 // later. DATABASE_URL is validated by Prisma on first query.
@@ -29,3 +30,9 @@ initializeSocket(server);
 server.listen(PORT, () => {
   console.log(`Operator CRM backend listening on http://localhost:${PORT}`);
 });
+
+// One-time numbering of POPs created before POP IDs existed. Soft-fail: a
+// backfill error must never stop the server from serving.
+backfillPopCodes()
+  .then((n) => n && console.log(`[popCode] assigned POP IDs to ${n} existing POP(s)`))
+  .catch((e) => console.warn('[popCode] backfill failed (will retry on next start):', e?.message));

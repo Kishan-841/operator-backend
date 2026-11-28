@@ -20,7 +20,7 @@ export const mapProgress = (status) => {
 export const getMapPops = async (_req, res) => {
   try {
     const pops = await prisma.popLocation.findMany({
-      select: { id: true, name: true, latitude: true, longitude: true },
+      select: { id: true, popCode: true, name: true, latitude: true, longitude: true },
       orderBy: { name: 'asc' },
     });
     const items = pops.filter(

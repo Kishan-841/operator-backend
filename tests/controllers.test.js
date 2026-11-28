@@ -1614,6 +1614,24 @@ test('POST /api/pop-locations stores either a POP type or a junction type', asyn
   assert.equal(junction.body.data.junctionType, '4w FTA');
 });
 
+test('new POPs get sequential POP IDs (single create and bulk import) and are searchable by ID', async () => {
+  await prisma.counter.deleteMany({ where: { key: 'POP' } });
+  const one = await request('POST', '/api/pop-locations', { token: tokens.feasibility, body: { ...popBody, name: 'POP Coded' } });
+  assert.match(one.body.data.popCode, /^POP-\d{3,}$/);
+  const bulk = await request('POST', '/api/pop-locations/bulk', {
+    token: tokens.feasibility,
+    body: { rows: [{ name: 'Bulk 1', latitude: 19, longitude: 72 }, { name: 'Bulk 2', latitude: 19, longitude: 72 }] },
+  });
+  assert.equal(bulk.body.created, 2);
+  const list = await request('GET', '/api/pop-locations', { token: tokens.feasibility });
+  const codes = Object.fromEntries(list.body.items.map((p) => [p.name, p.popCode]));
+  const n = (c) => Number(c.split('-')[1]);
+  assert.equal(n(codes['Bulk 1']), n(codes['POP Coded']) + 1);
+  assert.equal(n(codes['Bulk 2']), n(codes['POP Coded']) + 2);
+  const found = await request('GET', `/api/pop-locations?q=${codes['Bulk 2']}`, { token: tokens.feasibility });
+  assert.deepEqual(found.body.items.map((p) => p.name), ['Bulk 2']);
+});
+
 test('POST /api/pop-locations rejects no type, both types, or an unknown type → 400', async () => {
   const { popType, ...noPopType } = popBody;
   const missing = await request('POST', '/api/pop-locations', { token: tokens.feasibility, body: noPopType });

@@ -28,7 +28,7 @@ const VALID_STATUSES = Object.values(LeadStatus);
 const creatorSelect = {
   createdBy: { select: { id: true, name: true, email: true } },
   assignedSales: { select: { id: true, name: true } },
-  popLocation: { select: { id: true, name: true, latitude: true, longitude: true } },
+  popLocation: { select: { id: true, popCode: true, name: true, latitude: true, longitude: true } },
   distributor: { select: { id: true, name: true, isDefault: true } },
 };
 

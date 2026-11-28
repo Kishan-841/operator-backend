@@ -2,6 +2,7 @@ import prisma from '../config/db.js';
 import { logEvent } from '../services/statusChangeLog.service.js';
 import { actorFromReq } from '../utils/requestContext.js';
 import { parsePagination, paginatedResponse } from '../utils/pagination.js';
+import { generatePopCode, reservePopCodes } from '../services/popCode.service.js';
 
 const isValidCoord = (v, max) => typeof v === 'number' && Number.isFinite(v) && Math.abs(v) <= max;
 
@@ -51,7 +52,15 @@ const parsePopBody = (body) => {
 export const listPopLocations = async (req, res) => {
   try {
     const term = req.query.q ? String(req.query.q).trim() : '';
-    const where = term ? { name: { contains: term, mode: 'insensitive' } } : {};
+    // Search by name or POP ID ("POP-007", or just "007").
+    const where = term
+      ? {
+          OR: [
+            { name: { contains: term, mode: 'insensitive' } },
+            { popCode: { contains: term, mode: 'insensitive' } },
+          ],
+        }
+      : {};
 
     if (req.query.page !== undefined) {
       const { page, limit, skip } = parsePagination(req.query);
@@ -84,15 +93,17 @@ export const createPopLocation = async (req, res) => {
     const existing = await prisma.popLocation.findUnique({ where: { name } });
     if (existing) return res.json({ message: 'A POP with this name already exists.', data: existing });
 
-    const data = await prisma.popLocation.create({
-      data: { ...fields, createdById: req.user.id },
-    });
+    const data = await prisma.$transaction(async (tx) =>
+      tx.popLocation.create({
+        data: { ...fields, popCode: await generatePopCode(tx), createdById: req.user.id },
+      }),
+    );
 
     await logEvent({
       action: 'POP_CREATED',
       entityType: 'PopLocation',
       entityId: data.id,
-      summary: `Created POP "${name}" (${latitude}, ${longitude})`,
+      summary: `Created POP ${data.popCode} "${name}" (${latitude}, ${longitude})`,
       actor: actorFromReq(req),
     });
     return res.status(201).json({ message: 'POP location created.', data });
@@ -127,7 +138,7 @@ export const updatePopLocation = async (req, res) => {
       action: 'POP_UPDATED',
       entityType: 'PopLocation',
       entityId: data.id,
-      summary: `Updated POP "${data.name}" (${data.latitude}, ${data.longitude}; ${data.popType ?? data.junctionType})`,
+      summary: `Updated POP ${data.popCode ?? ''} "${data.name}" (${data.latitude}, ${data.longitude}; ${data.popType ?? data.junctionType})`,
       actor: actorFromReq(req),
     });
     return res.json({ message: 'POP location updated.', data });
@@ -212,9 +223,13 @@ export const bulkCreatePopLocations = async (req, res) => {
     });
 
     if (toCreate.length) {
-      await prisma.popLocation.createMany({
-        data: toCreate.map((v) => ({ ...v, createdById: req.user.id })),
-        skipDuplicates: true,
+      // One counter bump for the whole file; codes follow the spreadsheet order.
+      await prisma.$transaction(async (tx) => {
+        const codes = await reservePopCodes(tx, toCreate.length);
+        await tx.popLocation.createMany({
+          data: toCreate.map((v, i) => ({ ...v, popCode: codes[i], createdById: req.user.id })),
+          skipDuplicates: true,
+        });
       });
     }
 

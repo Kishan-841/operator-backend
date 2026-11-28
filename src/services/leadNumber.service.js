@@ -18,6 +18,21 @@ export const generateNumber = async (tx, key, prefix, pad = 4) => {
 
 export const generateLeadNumber = (tx = prisma) => generateNumber(tx, 'LEAD', 'OPC');
 
+/**
+ * Reserve `count` consecutive numbers in one counter bump (bulk creates) and
+ * return them formatted, in order.
+ */
+export const reserveNumbers = async (tx, key, prefix, count, pad = 4) => {
+  if (count <= 0) return [];
+  const counter = await tx.counter.upsert({
+    where: { key },
+    update: { value: { increment: count } },
+    create: { key, value: count },
+  });
+  const first = counter.value - count + 1;
+  return Array.from({ length: count }, (_, i) => `${prefix}-${String(first + i).padStart(pad, '0')}`);
+};
+
 /** DR-0001, DR-0002, … — one per delivery (material) request. */
 export const generateDeliveryRequestNumber = (tx = prisma) =>
   generateNumber(tx, 'DELIVERY_REQUEST', 'DR');
