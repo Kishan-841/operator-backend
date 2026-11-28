@@ -117,6 +117,28 @@ export const createPopLocation = async (req, res) => {
 };
 
 /**
+ * Validate one spreadsheet row (bulk add + bulk update). Types may both be
+ * blank (older sheets lack the columns) but a filled one must be valid, and a
+ * row can't fill both. Returns { data } or { error }.
+ */
+const parseImportRow = (raw) => {
+  const name = String(raw?.name || '').trim();
+  const latitude = Number(raw?.latitude);
+  const longitude = Number(raw?.longitude);
+  if (!name) return { error: 'A POP name is required.' };
+  if (!isValidCoord(latitude, 90)) return { error: 'Latitude must be a number between -90 and 90.' };
+  if (!isValidCoord(longitude, 180)) return { error: 'Longitude must be a number between -180 and 180.' };
+  const popType = canonicalType(raw?.popType, POP_TYPES);
+  const junctionType = canonicalType(raw?.junctionType, JUNCTION_TYPES);
+  if (popType === undefined) return { error: typeError.popType };
+  if (junctionType === undefined) return { error: typeError.junctionType };
+  if (popType && junctionType) return { error: typeError.both };
+  return { data: { name, latitude, longitude, popType: popType || null, junctionType: junctionType || null } };
+};
+
+const normalizeCode = (v) => String(v ?? '').replace(/\s+/g, '').toUpperCase();
+
+/**
  * PUT /api/pop-locations/:id { name, latitude, longitude, popType, junctionType }
  * — edit a POP. Leads keep the snapshot taken at feasibility, so past display is
  * unaffected by a rename.
@@ -177,6 +199,7 @@ export const updatePopLocation = async (req, res) => {
     });
     return res.json({ message: 'POP location updated.', data });
   } catch (error) {
+    if (error?.status === 409) return res.status(409).json({ message: error.message });
     console.error('[pop.update]', error);
     return res.status(500).json({ message: 'Failed to update POP location.' });
   }
@@ -206,40 +229,22 @@ export const bulkCreatePopLocations = async (req, res) => {
     rows.forEach((raw, i) => {
       const row = i + 1;
       const name = String(raw?.name || '').trim();
-      const latitude = Number(raw?.latitude);
-      const longitude = Number(raw?.longitude);
-      if (!name) {
-        errors.push({ row, name: '', reason: 'A POP name is required.' });
+      // "Add new" never takes IDs — a file with them belongs to "Update existing".
+      if (normalizeCode(raw?.popCode)) {
+        errors.push({ row, name, reason: 'This row has an ID — use "Update existing POPs" to edit it.' });
         return;
       }
-      if (!isValidCoord(latitude, 90)) {
-        errors.push({ row, name, reason: 'Latitude must be a number between -90 and 90.' });
+      const { data, error } = parseImportRow(raw);
+      if (error) {
+        errors.push({ row, name, reason: error });
         return;
       }
-      if (!isValidCoord(longitude, 180)) {
-        errors.push({ row, name, reason: 'Longitude must be a number between -180 and 180.' });
-        return;
-      }
-      const popType = canonicalType(raw?.popType, POP_TYPES);
-      const junctionType = canonicalType(raw?.junctionType, JUNCTION_TYPES);
-      if (popType === undefined) {
-        errors.push({ row, name, reason: typeError.popType });
-        return;
-      }
-      if (junctionType === undefined) {
-        errors.push({ row, name, reason: typeError.junctionType });
-        return;
-      }
-      if (popType && junctionType) {
-        errors.push({ row, name, reason: typeError.both });
-        return;
-      }
-      if (seen.has(name.toLowerCase())) {
+      if (seen.has(data.name.toLowerCase())) {
         skipped += 1; // duplicated within the same file
         return;
       }
-      seen.add(name.toLowerCase());
-      valid.push({ name, latitude, longitude, popType: popType || null, junctionType: junctionType || null });
+      seen.add(data.name.toLowerCase());
+      valid.push(data);
     });
 
     // Skip names that already exist in the DB (case-insensitive on the trimmed name).
@@ -278,5 +283,116 @@ export const bulkCreatePopLocations = async (req, res) => {
   } catch (error) {
     console.error('[pop.bulkCreate]', error);
     return res.status(500).json({ message: 'Failed to import POP locations.' });
+  }
+};
+
+/**
+ * POST /api/pop-locations/bulk-update { rows: [{ popCode, name, latitude,
+ * longitude, popType?, junctionType? }] } — edit existing locations from a
+ * spreadsheet (the "Update existing POPs" mode). Rows are matched by ID; the
+ * ID itself can't be changed here. Each row replaces the location's name,
+ * coordinates and type; unchanged rows are counted, not written. Switching POP
+ * ↔ junction moves the row to the other ID series (reported in `recoded`).
+ * Returns { updated, unchanged, recoded: [{ row, name, from, to }], errors }.
+ */
+export const bulkUpdatePopLocations = async (req, res) => {
+  try {
+    const rows = Array.isArray(req.body?.rows) ? req.body.rows : null;
+    if (!rows || rows.length === 0) {
+      return res.status(400).json({ message: 'Provide at least one row to update.' });
+    }
+
+    const errors = [];
+    const candidates = []; // { row, code, data }
+    const seenCodes = new Set();
+    const seenNames = new Map(); // lowercased name → code claiming it in this file
+    rows.forEach((raw, i) => {
+      const row = i + 1;
+      const name = String(raw?.name || '').trim();
+      const code = normalizeCode(raw?.popCode);
+      if (!code) {
+        errors.push({ row, name, reason: 'The ID is missing — new locations go through "Add new POPs".' });
+        return;
+      }
+      if (seenCodes.has(code)) {
+        errors.push({ row, name, reason: `${code} appears more than once in this file.` });
+        return;
+      }
+      seenCodes.add(code);
+      const { data, error } = parseImportRow(raw);
+      if (error) {
+        errors.push({ row, name, reason: error });
+        return;
+      }
+      const other = seenNames.get(data.name.toLowerCase());
+      if (other) {
+        errors.push({ row, name, reason: `The name is also used by ${other} in this file.` });
+        return;
+      }
+      seenNames.set(data.name.toLowerCase(), code);
+      candidates.push({ row, code, data });
+    });
+
+    const byCode = new Map(
+      (await prisma.popLocation.findMany({ where: { popCode: { in: candidates.map((c) => c.code) } } })).map((p) => [p.popCode, p]),
+    );
+    const nameOwners = await prisma.popLocation.findMany({
+      where: { name: { in: candidates.map((c) => c.data.name), mode: 'insensitive' } },
+      select: { id: true, name: true, popCode: true },
+    });
+
+    let updated = 0;
+    let unchanged = 0;
+    const recoded = [];
+    const same = (a, b) => a === b || (a == null && b == null);
+    for (const { row, code, data } of candidates) {
+      const current = byCode.get(code);
+      if (!current) {
+        errors.push({ row, name: data.name, reason: `No location has the ID ${code}.` });
+        continue;
+      }
+      const clash = nameOwners.find((o) => o.id !== current.id && o.name.toLowerCase() === data.name.toLowerCase());
+      if (clash) {
+        errors.push({ row, name: data.name, reason: `The name is already used by ${clash.popCode || 'another location'}.` });
+        continue;
+      }
+      const fields = ['name', 'latitude', 'longitude', 'popType', 'junctionType'];
+      const changes = fields
+        .filter((f) => !same(current[f], data[f]))
+        .map((f) => ({ field: f, from: current[f] ?? null, to: data[f] ?? null }));
+      if (!changes.length) {
+        unchanged += 1;
+        continue;
+      }
+      const saved = await prisma.$transaction(async (tx) => {
+        const popCode = codeMatchesSeries(current.popCode, seriesFor(data)) ? undefined : await generateLocationCode(tx, data);
+        return tx.popLocation.update({ where: { id: current.id }, data: { ...data, ...(popCode ? { popCode } : {}) } });
+      });
+      if (saved.popCode !== current.popCode) {
+        recoded.push({ row, name: saved.name, from: current.popCode, to: saved.popCode });
+        changes.push({ field: 'popCode', from: current.popCode, to: saved.popCode });
+      }
+      await logEvent({
+        action: 'POP_UPDATED',
+        entityType: 'PopLocation',
+        entityId: saved.id,
+        summary: `Bulk-updated ${saved.popCode} "${saved.name}" (${changes.map((c) => c.field).join(', ')})`,
+        changes,
+        actor: actorFromReq(req),
+      });
+      updated += 1;
+    }
+
+    await logEvent({
+      action: 'POP_BULK_UPDATED',
+      entityType: 'PopLocation',
+      summary: `Bulk update: ${updated} updated, ${unchanged} unchanged, ${errors.length} error(s)`,
+      actor: actorFromReq(req),
+    });
+    errors.sort((a, b) => a.row - b.row);
+    return res.json({ updated, unchanged, recoded, errors });
+  } catch (error) {
+    console.error('[pop.bulkUpdate]', error);
+    return res.status(500).json({ message: 'Failed to update POP locations.' });
   }
 };

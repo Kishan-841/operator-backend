@@ -1661,6 +1661,61 @@ test('admins can set a POP ID by hand; format, duplicates and role are enforced'
   assert.equal(next.body.data.popCode, 'POP-051', 'the counter skips past a hand-picked ID');
   const unchanged = await request('PUT', url, { token: tokens.feasibility, body: { ...popBody, name: 'Manual A', popCode: 'POP-050' } });
   assert.equal(unchanged.status, 200, 'sending the current ID back is not a change');
+
+  // IDs are never reused: Manual A's old ID (POP-001) is retired for good.
+  const reuse = await request('PUT', `/api/pop-locations/${b.body.data.id}`, {
+    token: tokens.admin, body: { ...popBody, name: 'Manual B', popCode: 'POP-001' },
+  });
+  assert.equal(reuse.status, 409);
+  assert.match(reuse.body.message, /never reused/);
+});
+
+test('bulk add refuses rows that carry an ID; bulk update edits rows matched by ID', async () => {
+  await prisma.counter.deleteMany({ where: { key: { in: ['POP', 'JN'] } } });
+  const add = await request('POST', '/api/pop-locations/bulk', {
+    token: tokens.feasibility,
+    body: { rows: [
+      { name: 'Site A', latitude: 19, longitude: 72, popType: '10G' },
+      { name: 'Site B', latitude: 19, longitude: 72, junctionType: 'JC 48F' },
+      { name: 'Site C', latitude: 19, longitude: 72, popType: '1G' },
+      { popCode: 'POP-001', name: 'Sneaky', latitude: 19, longitude: 72 },
+    ] },
+  });
+  assert.equal(add.body.created, 3);
+  assert.equal(add.body.errors.length, 1);
+  assert.match(add.body.errors[0].reason, /Update existing/);
+
+  const up = await request('POST', '/api/pop-locations/bulk-update', {
+    token: tokens.feasibility,
+    body: { rows: [
+      { popCode: 'pop-001', name: 'Site A renamed', latitude: 18.5, longitude: 73.8, popType: '100G' }, // 1 changed
+      { popCode: 'JN-001', name: 'Site B', latitude: 19, longitude: 72, junctionType: 'JC 48F' }, // 2 unchanged
+      { popCode: 'POP-002', name: 'Site C', latitude: 19, longitude: 72, junctionType: '4w FTA' }, // 3 becomes a junction
+      { popCode: 'POP-999', name: 'Ghost', latitude: 1, longitude: 1 }, // 4 unknown ID
+      { name: 'No ID', latitude: 1, longitude: 1 }, // 5 missing ID
+      { popCode: 'JN-001', name: 'Dup', latitude: 1, longitude: 1 }, // 6 repeated ID
+      { popCode: 'POP-003', name: 'x', latitude: 999, longitude: 1 }, // 7 bad latitude
+    ] },
+  });
+  assert.equal(up.status, 200);
+  assert.equal(up.body.updated, 2);
+  assert.equal(up.body.unchanged, 1);
+  assert.deepEqual(up.body.recoded, [{ row: 3, name: 'Site C', from: 'POP-002', to: 'JN-002' }]);
+  assert.deepEqual(up.body.errors.map((e) => e.row), [4, 5, 6, 7]);
+
+  const list = await request('GET', '/api/pop-locations', { token: tokens.feasibility });
+  const a = list.body.items.find((p) => p.popCode === 'POP-001');
+  assert.equal(a.name, 'Site A renamed');
+  assert.equal(a.latitude, 18.5);
+  assert.equal(a.popType, '100G');
+
+  const clash = await request('POST', '/api/pop-locations/bulk-update', {
+    token: tokens.feasibility,
+    body: { rows: [{ popCode: 'POP-001', name: 'site b', latitude: 1, longitude: 1 }] },
+  });
+  assert.match(clash.body.errors[0].reason, /already used by JN-001/);
+  const forbidden = await request('POST', '/api/pop-locations/bulk-update', { token: tokens.sales, body: { rows: [] } });
+  assert.equal(forbidden.status, 403);
 });
 
 test('new POPs get sequential POP IDs (single create and bulk import) and are searchable by ID', async () => {

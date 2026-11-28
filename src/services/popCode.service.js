@@ -126,13 +126,24 @@ export const parseManualCode = (raw, loc) => {
 };
 
 /**
- * Record a hand-picked ID against its series counter: if it's ahead of the
- * counter, move the counter up so the app never generates that number later.
+ * Claim a hand-picked ID. IDs are never reused — not after an ID change, a
+ * type switch or (if ever added) a delete — so the number must be above every
+ * number its series has issued (the counter only ever goes up). On success the
+ * counter moves to it, so the app never generates it either. Atomic: two
+ * admins can't claim the same number. Throws a 409 otherwise.
  */
 export const claimManualCode = async (tx, code, loc) => {
-  const { key } = SERIES[seriesFor(loc)];
+  const { key, prefix } = SERIES[seriesFor(loc)];
   const n = Number(code.split('-')[1]);
+  const bumped = await tx.counter.updateMany({ where: { key, value: { lt: n } }, data: { value: n } });
+  if (bumped.count === 1) return;
   const counter = await tx.counter.findUnique({ where: { key } });
-  if (!counter) await tx.counter.create({ data: { key, value: n } });
-  else if (counter.value < n) await tx.counter.update({ where: { key }, data: { value: n } });
+  if (!counter) {
+    await tx.counter.create({ data: { key, value: n } });
+    return;
+  }
+  throw Object.assign(
+    new Error(`${code} has already been issued — IDs are never reused. Pick a number above ${format(seriesFor(loc), counter.value)} (the latest ${prefix} ID).`),
+    { status: 409 },
+  );
 };
